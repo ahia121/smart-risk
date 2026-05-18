@@ -58,6 +58,24 @@
     font-weight:800; letter-spacing:.06em; background:#16302350;
     border:1px solid var(--line); color:var(--txt); }
   .fill:active{ filter:brightness(1.2); }
+  .sl-card{ padding:14px !important; }
+  .sl-label{ font-size:11px; color:var(--dim); letter-spacing:.1em;
+    text-transform:uppercase; display:block; margin-bottom:9px; }
+  .sl-row{ display:flex; gap:8px; }
+  #slInput{ flex:1; padding:13px 12px; border-radius:10px;
+    background:#081310; border:1px solid var(--line); color:var(--mint);
+    font:18px var(--mono); outline:none; min-width:0; }
+  #slInput:focus{ border-color:var(--mint);
+    box-shadow:0 0 0 3px rgba(45,227,126,.14); }
+  .sl-btn{ padding:0 16px; border-radius:10px; border:1px solid var(--line);
+    background:#12241b; color:var(--mint); font:700 13px var(--mono);
+    cursor:pointer; }
+  .sl-btn.ghost{ color:var(--dim); padding:0 13px; }
+  .sl-btn:active{ filter:brightness(1.3); }
+  .sl-hint{ font-size:10px; color:#456b58; margin-top:8px;
+    line-height:1.5; }
+  .sl-hint.err{ color:var(--red); }
+  .sl-hint.ok{ color:var(--mint); }
   .row{ display:flex; gap:12px; }
   .trade{ flex:1; padding:20px 6px; border-radius:14px; font-size:18px;
     font-weight:800; letter-spacing:.1em; opacity:.38;
@@ -122,12 +140,27 @@
       <div class="grid">
         <div class="cell"><div class="k">Direction</div>
           <div class="v" id="dir">—</div></div>
-        <div class="cell"><div class="k">SL (clipboard)</div>
+        <div class="cell"><div class="k">SL (used)</div>
           <div class="v" id="stop">—</div></div>
         <div class="cell"><div class="k">Size</div>
           <div class="v" id="size">—</div></div>
         <div class="cell"><div class="k">Take-profit</div>
           <div class="v" id="tp">—</div></div>
+      </div>
+    </div>
+
+    <div style="height:12px"></div>
+    <div class="card sl-card">
+      <label class="sl-label">Stop-loss (SL) — set it here on the phone</label>
+      <div class="sl-row">
+        <input id="slInput" type="text" inputmode="decimal"
+          placeholder="e.g. 4527.0" autocomplete="off"
+          autocapitalize="off" spellcheck="false">
+        <button id="slPaste" class="sl-btn">Paste</button>
+        <button id="slClear" class="sl-btn ghost">✕</button>
+      </div>
+      <div class="sl-hint" id="slHint">
+        Type or paste your stop price. Direction is auto-detected from it.
       </div>
     </div>
 
@@ -222,8 +255,14 @@ function render(s) {
   $('status').textContent = s.status || (s.ready ? 'ready' : 'waiting…');
   $('status').className = 'status ' + (s.ready ? 'ok' : '');
 
-  // Arm only the side the laptop reports as armed.
-  const armed = s.armed;
+  // Arm the correct side. Prefer the phone's own SL-vs-price geometry
+  // (so it works even before the laptop has the SL); fall back to the
+  // laptop-reported armed side. Laptop's Module G still re-checks.
+  let armed = s.armed;
+  const sl = currentSl();
+  if (sl != null && lastPrice != null) {
+    armed = lastPrice > sl ? 'LONG' : lastPrice < sl ? 'SHORT' : null;
+  }
   $('btnBuy').classList.toggle('armed', armed === 'LONG');
   $('btnSell').classList.toggle('armed', armed === 'SHORT');
 }
@@ -260,13 +299,68 @@ function startPolling() {
 }
 if (cfg && cfg.url && cfg.key) startPolling();
 
+// ── SL input on the phone (source of truth for remote trading) ──────
+function currentSl() {
+  let raw = ($('slInput').value || '').trim();
+  // Persian/Arabic comma → normal; strip thousands commas (1,234.5);
+  // a lone comma is treated as the decimal separator (4527,5).
+  raw = raw.replace(/٬/g, ',');
+  if (/,\d{1,2}$/.test(raw) && !raw.includes('.')) {
+    raw = raw.replace(',', '.');           // 4527,5 → 4527.5
+  } else {
+    raw = raw.replace(/,/g, '');           // 4,527.5 → 4527.5
+  }
+  raw = raw.replace(/[^\d.]/g, '');
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+function refreshSlHint() {
+  const sl = currentSl();
+  const h = $('slHint');
+  if (sl == null) {
+    h.textContent = 'Type or paste your stop price. '
+      + 'Direction is auto-detected from it.';
+    h.className = 'sl-hint';
+  } else {
+    h.textContent = 'SL = ' + sl + ' · will be sent with every command';
+    h.className = 'sl-hint ok';
+  }
+}
+$('slInput').addEventListener('input', refreshSlHint);
+$('slClear').onclick = () => { $('slInput').value = ''; refreshSlHint(); };
+$('slPaste').onclick = async () => {
+  try {
+    const t = await navigator.clipboard.readText();
+    const m = String(t).replace(/[,٬]/g, '.').match(/-?\d+(\.\d+)?/);
+    if (m) { $('slInput').value = m[0]; refreshSlHint(); }
+    else {
+      $('slHint').textContent = 'Clipboard has no number';
+      $('slHint').className = 'sl-hint err';
+    }
+  } catch {
+    $('slHint').textContent =
+      'Tap the field and use the keyboard paste instead';
+    $('slHint').className = 'sl-hint err';
+  }
+};
+refreshSlHint();
+
 // ── Issue a command + await the laptop's ack ────────────────────────
 let busy = false;
 async function sendCmd(verb) {
   if (!cfg || busy) return;
+  const sl = currentSl();
+  // Trading verbs need an SL; fill/toggle don't strictly require one.
+  if ((verb === 'buy' || verb === 'sell' || verb === 'fill')
+      && sl == null) {
+    $('status').textContent = 'Enter your SL price first';
+    $('status').className = 'status err';
+    $('slInput').focus();
+    return;
+  }
   busy = true;
   const id = 'c' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
-  const cmd = { id, verb, key: cfg.key, ts: Date.now() };
+  const cmd = { id, verb, key: cfg.key, ts: Date.now(), sl };
   $('status').textContent = 'sending ' + verb + '…';
   $('status').className = 'status';
   try {
