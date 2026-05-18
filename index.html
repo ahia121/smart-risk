@@ -1,0 +1,314 @@
+<!doctype html>
+<!-- ╔════════════════════════════════════════════════════════════════╗
+     ║ MODULE I · PHONE REMOTE (PWA)                                    ║
+     ║ Single self-contained page. Open it in the phone browser. Talks  ║
+     ║ ONLY to your own Firebase RTDB; the laptop extension does every  ║
+     ║ real action behind its safety guards. No secrets are hard-coded; ║
+     ║ DB URL + pair key are entered once and stored on the phone.     ║
+     ╚════════════════════════════════════════════════════════════════╝ -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,
+  maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#070f0c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>MSA Remote</title>
+<style>
+  :root{ --bg:#070f0c; --card:#0c1814; --line:#1d3729; --txt:#cfe9dd;
+    --dim:#6fa98c; --mint:#2de37e; --red:#ff5d6c;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace; }
+  *{ box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:
+     transparent; }
+  body{ background:var(--bg); color:var(--txt); font-family:var(--mono);
+    min-height:100vh; padding:env(safe-area-inset-top) 16px
+    env(safe-area-inset-bottom); display:flex; flex-direction:column;
+    gap:14px; padding-top:22px; }
+  .top{ display:flex; align-items:center; gap:10px; }
+  .mark{ width:13px;height:13px;border-radius:4px;
+    background:linear-gradient(135deg,var(--mint),#1eb863);
+    box-shadow:0 0 12px rgba(45,227,126,.5); }
+  .top b{ font-size:15px; letter-spacing:.06em; }
+  .conn{ margin-left:auto; font-size:11px; padding:3px 9px;
+    border-radius:999px; border:1px solid var(--line); color:var(--dim); }
+  .conn.on{ color:var(--mint); border-color:#245c43;
+    background:rgba(45,227,126,.08); }
+  .conn.off{ color:var(--red); border-color:#5a2730; }
+  .card{ background:var(--card); border:1px solid var(--line);
+    border-radius:14px; padding:16px; }
+  .price{ font-size:42px; font-weight:800; letter-spacing:-1px;
+    transition:color .15s; }
+  .price.up{ color:var(--mint); } .price.dn{ color:var(--red); }
+  .sym{ font-size:12px; color:var(--dim); letter-spacing:.16em;
+    text-transform:uppercase; margin-bottom:4px; }
+  .grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px;
+    margin-top:14px; }
+  .cell{ background:#0a1712; border:1px solid #1c3527;
+    border-radius:10px; padding:10px 12px; }
+  .cell .k{ font-size:10px; color:var(--dim); letter-spacing:.12em;
+    text-transform:uppercase; }
+  .cell .v{ font-size:17px; font-weight:700; margin-top:3px;
+    word-break:break-all; }
+  .v.long{ color:var(--mint); } .v.short{ color:var(--red); }
+  .status{ text-align:center; font-size:12px; color:var(--dim);
+    min-height:16px; }
+  .status.ok{ color:var(--mint); } .status.err{ color:var(--red); }
+  button{ font-family:inherit; border:none; cursor:pointer; }
+  .fill{ width:100%; padding:16px; border-radius:12px; font-size:15px;
+    font-weight:800; letter-spacing:.06em; background:#16302350;
+    border:1px solid var(--line); color:var(--txt); }
+  .fill:active{ filter:brightness(1.2); }
+  .row{ display:flex; gap:12px; }
+  .trade{ flex:1; padding:20px 6px; border-radius:14px; font-size:18px;
+    font-weight:800; letter-spacing:.1em; opacity:.38;
+    filter:grayscale(.7); border:1px solid var(--line);
+    background:#0b1712; color:#7aa890; transition:filter .12s,opacity .12s;}
+  .trade.armed{ opacity:1; filter:none; }
+  .trade.buy.armed{ background:linear-gradient(180deg,#103224,#0c2419);
+    border-color:var(--mint); color:var(--mint); }
+  .trade.sell.armed{ background:linear-gradient(180deg,#321016,#241015);
+    border-color:var(--red); color:var(--red); }
+  .trade.armed:active{ filter:brightness(1.18); transform:scale(.99); }
+  .trade.pending{ animation:pp .8s ease-in-out infinite; }
+  @keyframes pp{ 50%{ filter:brightness(1.3); } }
+  .setup{ display:flex; flex-direction:column; gap:12px; }
+  .setup input{ width:100%; padding:13px; border-radius:10px;
+    background:#081310; border:1px solid var(--line); color:var(--txt);
+    font:14px var(--mono); }
+  .setup label{ font-size:11px; color:var(--dim); letter-spacing:.1em;
+    text-transform:uppercase; display:block; margin-bottom:5px; }
+  .setup button{ padding:14px; border-radius:10px; font-weight:800;
+    background:linear-gradient(180deg,var(--mint),#1eb863); color:#04130b; }
+  .hint{ font-size:11px; color:var(--dim); line-height:1.6; }
+  .warn{ color:#ff9aa2; }
+  .gear{ background:none; color:var(--dim); font-size:18px;
+    padding:4px 8px; }
+  .hidden{ display:none !important; }
+</style>
+</head>
+<body>
+
+  <div class="top">
+    <span class="mark"></span><b>MSA Remote</b>
+    <span class="conn off" id="conn">offline</span>
+    <button class="gear" id="gear" title="Settings">⚙</button>
+  </div>
+
+  <!-- ── Setup (shown until DB URL + key entered) ──────────────────── -->
+  <div class="card setup" id="setup">
+    <div class="hint">Enter the <b>same</b> Firebase URL and Pair key you
+      put in the laptop extension's Settings → Remote. Stored only on this
+      phone.</div>
+    <div>
+      <label>Firebase Realtime DB URL</label>
+      <input id="inUrl" placeholder="https://xxxx-default-rtdb.firebaseio.com"
+        autocapitalize="off" autocomplete="off" spellcheck="false">
+    </div>
+    <div>
+      <label>Pair key (shared secret)</label>
+      <input id="inKey" placeholder="your secret" autocapitalize="off"
+        autocomplete="off" spellcheck="false">
+    </div>
+    <button id="saveCfg">Connect</button>
+    <div class="hint warn">⚠ Anyone with this URL + key can send trade
+      commands. Use a long random key and don't share it.</div>
+  </div>
+
+  <!-- ── Live dashboard ────────────────────────────────────────────── -->
+  <div id="dash" class="hidden">
+    <div class="card">
+      <div class="sym" id="sym">—</div>
+      <div class="price" id="price">—</div>
+      <div class="grid">
+        <div class="cell"><div class="k">Direction</div>
+          <div class="v" id="dir">—</div></div>
+        <div class="cell"><div class="k">SL (clipboard)</div>
+          <div class="v" id="stop">—</div></div>
+        <div class="cell"><div class="k">Size</div>
+          <div class="v" id="size">—</div></div>
+        <div class="cell"><div class="k">Take-profit</div>
+          <div class="v" id="tp">—</div></div>
+      </div>
+    </div>
+
+    <div style="height:12px"></div>
+    <button class="fill" id="btnFill">FILL FIELDS</button>
+    <div style="height:12px"></div>
+    <div class="row">
+      <button class="trade buy" id="btnBuy">BUY</button>
+      <button class="trade sell" id="btnSell">SELL</button>
+    </div>
+    <div style="height:14px"></div>
+    <div class="status" id="status">connecting…</div>
+    <div style="height:8px"></div>
+    <div class="hint" id="freshness">—</div>
+  </div>
+
+<script>
+// ╔══════════════════════════════════════════════════════════════════╗
+// ║ MODULE I · PHONE REMOTE — logic                                    ║
+// ║ Polls <db>/state for the live snapshot; writes <db>/cmd to issue a ║
+// ║ command; reads <db>/ack for the laptop's verdict. No trade logic   ║
+// ║ here — the laptop's Module G owns every safety decision.           ║
+// ╚══════════════════════════════════════════════════════════════════╝
+'use strict';
+const LS = 'msa_remote_cfg_v1';
+let cfg = null;
+try { cfg = JSON.parse(localStorage.getItem(LS) || 'null'); } catch {}
+
+const $ = (id) => document.getElementById(id);
+const setupEl = $('setup'), dashEl = $('dash');
+
+function showDash(on) {
+  setupEl.classList.toggle('hidden', on);
+  dashEl.classList.toggle('hidden', !on);
+}
+if (cfg && cfg.url && cfg.key) {
+  $('inUrl').value = cfg.url; $('inKey').value = cfg.key; showDash(true);
+}
+
+$('gear').onclick = () => showDash(false);
+$('saveCfg').onclick = () => {
+  const url = $('inUrl').value.trim().replace(/\/+$/, '');
+  const key = $('inKey').value.trim();
+  if (!/^https:\/\/.+firebaseio\.com$/.test(url) || key.length < 6) {
+    alert('Enter a valid Firebase URL and a key of 6+ chars.');
+    return;
+  }
+  cfg = { url, key };
+  localStorage.setItem(LS, JSON.stringify(cfg));
+  showDash(true);
+  startPolling();
+};
+
+const dbUrl = (p) => `${cfg.url}/${p}.json`;
+
+async function dbGet(p) {
+  const r = await fetch(dbUrl(p), { cache: 'no-store' });
+  if (!r.ok) throw new Error('get ' + r.status);
+  return r.json();
+}
+async function dbPut(p, v) {
+  const r = await fetch(dbUrl(p), {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(v),
+  });
+  if (!r.ok) throw new Error('put ' + r.status);
+  return r.json();
+}
+
+// ── Render the live snapshot ─────────────────────────────────────────
+let lastPrice = null;
+let lastStateAt = 0;
+function render(s) {
+  if (!s) return;
+  lastStateAt = Date.now();
+  $('sym').textContent = s.symbol || '—';
+  const p = s.price;
+  if (p != null) {
+    const cls = lastPrice == null ? '' : p > lastPrice ? 'up'
+      : p < lastPrice ? 'dn' : '';
+    $('price').textContent = p;
+    $('price').className = 'price ' + cls;
+    lastPrice = p;
+  }
+  $('stop').textContent = s.stop != null ? s.stop : '—';
+  $('dir').textContent = s.direction || '—';
+  $('dir').className = 'v ' + (s.direction === 'LONG' ? 'long'
+    : s.direction === 'SHORT' ? 'short' : '');
+  $('size').textContent = s.size != null
+    ? (s.sizeUnit === 'quote' ? s.size + ' USDT' : s.size) : '—';
+  $('tp').textContent = s.takeProfit != null ? s.takeProfit : '—';
+  $('status').textContent = s.status || (s.ready ? 'ready' : 'waiting…');
+  $('status').className = 'status ' + (s.ready ? 'ok' : '');
+
+  // Arm only the side the laptop reports as armed.
+  const armed = s.armed;
+  $('btnBuy').classList.toggle('armed', armed === 'LONG');
+  $('btnSell').classList.toggle('armed', armed === 'SHORT');
+}
+
+// ── Connection health ────────────────────────────────────────────────
+function setConn(state) {
+  const c = $('conn');
+  c.className = 'conn ' + state;
+  c.textContent = state === 'on' ? 'live'
+    : state === 'stale' ? 'stale' : 'offline';
+}
+setInterval(() => {
+  if (!cfg) return;
+  const age = Date.now() - lastStateAt;
+  $('freshness').textContent = lastStateAt
+    ? `last update ${Math.round(age / 1000)}s ago` : 'no data yet';
+  if (age < 4000) setConn('on');
+  else if (age < 15000) setConn('stale');
+  else setConn('off');
+}, 1000);
+
+// ── Poll state + acks ────────────────────────────────────────────────
+let pollT = null;
+async function poll() {
+  try {
+    const s = await dbGet('state');
+    if (s && s.key === cfg.key) render(s);
+  } catch { /* keep trying */ }
+}
+function startPolling() {
+  if (pollT) clearInterval(pollT);
+  poll();
+  pollT = setInterval(poll, 700);
+}
+if (cfg && cfg.url && cfg.key) startPolling();
+
+// ── Issue a command + await the laptop's ack ────────────────────────
+let busy = false;
+async function sendCmd(verb) {
+  if (!cfg || busy) return;
+  busy = true;
+  const id = 'c' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+  const cmd = { id, verb, key: cfg.key, ts: Date.now() };
+  $('status').textContent = 'sending ' + verb + '…';
+  $('status').className = 'status';
+  try {
+    await dbPut('cmd', cmd);
+    // Wait up to 6s for the laptop's ack on this id.
+    const t0 = Date.now();
+    while (Date.now() - t0 < 6000) {
+      await new Promise((r) => setTimeout(r, 400));
+      let ack;
+      try { ack = await dbGet('ack'); } catch { continue; }
+      if (ack && ack.id === id) {
+        $('status').textContent = (ack.ok ? '✓ ' : '✗ ') +
+          (ack.reason || (ack.ok ? 'done' : 'failed'));
+        $('status').className = 'status ' + (ack.ok ? 'ok' : 'err');
+        busy = false;
+        return;
+      }
+    }
+    $('status').textContent = '⚠ no reply — check laptop & MEXC tab';
+    $('status').className = 'status err';
+  } catch (e) {
+    $('status').textContent = '✗ network: ' + e.message;
+    $('status').className = 'status err';
+  }
+  busy = false;
+}
+
+$('btnFill').onclick = () => sendCmd('fill');
+$('btnBuy').onclick = () => {
+  if (!$('btnBuy').classList.contains('armed')) {
+    $('status').textContent = 'BUY locked — SL implies the other side';
+    $('status').className = 'status err'; return;
+  }
+  sendCmd('buy');
+};
+$('btnSell').onclick = () => {
+  if (!$('btnSell').classList.contains('armed')) {
+    $('status').textContent = 'SELL locked — SL implies the other side';
+    $('status').className = 'status err'; return;
+  }
+  sendCmd('sell');
+};
+</script>
+</body>
+</html>
