@@ -233,6 +233,18 @@ async function dbPut(p, v) {
 // ── Render the live snapshot ─────────────────────────────────────────
 let lastPrice = null;
 let lastStateAt = 0;
+// Compute size/TP locally so the phone is self-consistent with ITS own
+// SL, instead of showing laptop-clipboard values that may disagree.
+function localPlan(price, sl, st) {
+  if (price == null || sl == null || price === sl) return null;
+  const dir = price > sl ? 'LONG' : 'SHORT';
+  const priceRisk = Math.abs(price - sl);
+  const rr = Number(st && st.rrRatio) || 2;
+  const tp = dir === 'LONG'
+    ? price + priceRisk * rr : price - priceRisk * rr;
+  return { dir, tp };
+}
+
 function render(s) {
   if (!s) return;
   lastStateAt = Date.now();
@@ -245,26 +257,38 @@ function render(s) {
     $('price').className = 'price ' + cls;
     lastPrice = p;
   }
-  $('stop').textContent = s.stop != null ? s.stop : '—';
-  $('dir').textContent = s.direction || '—';
-  $('dir').className = 'v ' + (s.direction === 'LONG' ? 'long'
-    : s.direction === 'SHORT' ? 'short' : '');
+
+  // ── THE phone SL field is the single source of truth ─────────────
+  // If you typed/pasted an SL here, EVERYTHING (card, direction, TP,
+  // buttons) is derived from it. The laptop clipboard SL is ignored so
+  // the three readouts can never disagree.
+  const sl = currentSl();
+  let dir, tp;
+  if (sl != null && lastPrice != null) {
+    const lp = localPlan(lastPrice, sl, s);
+    dir = lp ? lp.dir : null;
+    tp = lp ? lp.tp : null;
+    $('stop').textContent = sl;            // show YOUR SL, not laptop's
+  } else {
+    // No phone SL yet → fall back to whatever the laptop reports.
+    dir = s.direction || null;
+    tp = s.takeProfit;
+    $('stop').textContent = s.stop != null ? s.stop : '—';
+  }
+
+  $('dir').textContent = dir || '—';
+  $('dir').className = 'v ' + (dir === 'LONG' ? 'long'
+    : dir === 'SHORT' ? 'short' : '');
   $('size').textContent = s.size != null
     ? (s.sizeUnit === 'quote' ? s.size + ' USDT' : s.size) : '—';
-  $('tp').textContent = s.takeProfit != null ? s.takeProfit : '—';
+  $('tp').textContent = tp != null
+    ? (Math.round(tp * 1e6) / 1e6) : '—';
   $('status').textContent = s.status || (s.ready ? 'ready' : 'waiting…');
   $('status').className = 'status ' + (s.ready ? 'ok' : '');
 
-  // Arm the correct side. Prefer the phone's own SL-vs-price geometry
-  // (so it works even before the laptop has the SL); fall back to the
-  // laptop-reported armed side. Laptop's Module G still re-checks.
-  let armed = s.armed;
-  const sl = currentSl();
-  if (sl != null && lastPrice != null) {
-    armed = lastPrice > sl ? 'LONG' : lastPrice < sl ? 'SHORT' : null;
-  }
-  $('btnBuy').classList.toggle('armed', armed === 'LONG');
-  $('btnSell').classList.toggle('armed', armed === 'SHORT');
+  // Buttons follow the SAME direction shown above — never conflicting.
+  $('btnBuy').classList.toggle('armed', dir === 'LONG');
+  $('btnSell').classList.toggle('armed', dir === 'SHORT');
 }
 
 // ── Connection health ────────────────────────────────────────────────
@@ -286,10 +310,11 @@ setInterval(() => {
 
 // ── Poll state + acks ────────────────────────────────────────────────
 let pollT = null;
+let lastState = null;
 async function poll() {
   try {
     const s = await dbGet('state');
-    if (s && s.key === cfg.key) render(s);
+    if (s && s.key === cfg.key) { lastState = s; render(s); }
   } catch { /* keep trying */ }
 }
 function startPolling() {
@@ -325,13 +350,17 @@ function refreshSlHint() {
     h.textContent = 'SL = ' + sl + ' · will be sent with every command';
     h.className = 'sl-hint ok';
   }
+  // Re-render immediately so the card, direction, TP and Buy/Sell
+  // buttons all follow THIS SL without waiting for the next poll.
+  if (lastState) render(lastState);
 }
 $('slInput').addEventListener('input', refreshSlHint);
 $('slClear').onclick = () => { $('slInput').value = ''; refreshSlHint(); };
 $('slPaste').onclick = async () => {
   try {
     const t = await navigator.clipboard.readText();
-    const m = String(t).replace(/[,٬]/g, '.').match(/-?\d+(\.\d+)?/);
+    // Keep digits, dot and comma; currentSl() normalises commas safely.
+    const m = String(t).replace(/[٬]/g, ',').match(/-?[\d,]+(\.\d+)?/);
     if (m) { $('slInput').value = m[0]; refreshSlHint(); }
     else {
       $('slHint').textContent = 'Clipboard has no number';
