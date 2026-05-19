@@ -1,0 +1,583 @@
+<!doctype html>
+<!-- ╔════════════════════════════════════════════════════════════════╗
+     ║ MODULE K · PHONE CHART (PWA)                                     ║
+     ║ A TradingView-style candlestick chart for phone/tablet, fed by   ║
+     ║ MEXC's PUBLIC market API (no key — market data only). A draggable ║
+     ║ red SL line gives a live stop price. Three buttons (FILL/BUY/    ║
+     ║ SELL) reuse the SAME proven Firebase bridge as remote/index.html ║
+     ║ so the laptop extension still does every real action behind its  ║
+     ║ safety guards. Chart price is MARKET price; the SL is sent as an  ║
+     ║ exact NUMBER, never as a chart position.                        ║
+     ╚════════════════════════════════════════════════════════════════╝ -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,
+  maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#070f0c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>MSA Chart</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root{ --bg:#070f0c; --card:#0c1814; --line:#1d3729; --txt:#cfe9dd;
+    --dim:#6fa98c; --mint:#2de37e; --red:#ff5d6c;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace; }
+  *{ box-sizing:border-box; margin:0; padding:0;
+     -webkit-tap-highlight-color:transparent; }
+  html,body{ height:100%; }
+  body{ background:var(--bg); color:var(--txt);
+    font-family:var(--mono); display:flex; flex-direction:column;
+    overflow:hidden; padding-top:env(safe-area-inset-top);
+    padding-bottom:env(safe-area-inset-bottom); }
+
+  .bar{ display:flex; align-items:center; gap:10px; padding:10px 14px;
+    border-bottom:1px solid var(--line); flex:none; }
+  .mk{ width:11px;height:11px;border-radius:4px;
+    background:linear-gradient(135deg,var(--mint),#1eb863);
+    box-shadow:0 0 10px rgba(45,227,126,.5); }
+  .bar b{ font-size:13px; letter-spacing:.05em; }
+  .sym{ margin-left:2px; font-size:12px; color:var(--dim);
+    border:1px solid var(--line); border-radius:999px;
+    padding:4px 12px; background:#0a1712; cursor:pointer; }
+  .sym.on{ color:var(--mint); border-color:#245c43; }
+  .conn{ margin-left:auto; font-size:10px; padding:3px 9px;
+    border-radius:999px; border:1px solid var(--line); color:var(--dim); }
+  .conn.live{ color:var(--mint); border-color:#245c43;
+    background:rgba(45,227,126,.08); }
+  .conn.off{ color:var(--red); border-color:#5a2730; }
+  .gear{ background:none;border:none;color:var(--dim);font-size:17px;
+    padding:3px 6px;cursor:pointer; }
+
+  #chart{ flex:1; position:relative; min-height:0; }
+  .slpill{ position:absolute; right:8px; z-index:5; transform:
+    translateY(-50%); background:var(--red); color:#fff; font-weight:700;
+    font-size:12px; padding:3px 8px; border-radius:6px; display:none;
+    pointer-events:none; box-shadow:0 2px 8px rgba(0,0,0,.5); }
+
+  .slrow{ display:flex; align-items:center; gap:10px; padding:8px 14px;
+    border-top:1px solid var(--line); flex:none; font-size:12px; }
+  .slrow .lab{ color:var(--dim); letter-spacing:.08em;
+    text-transform:uppercase; font-size:10px; }
+  .slrow .val{ color:var(--red); font-weight:800; font-size:17px; }
+  .slrow .dir{ margin-left:auto; font-weight:800; font-size:13px; }
+  .dir.long{ color:var(--mint); } .dir.short{ color:var(--red); }
+  .reset{ background:#12241b; border:1px solid var(--line);
+    color:var(--mint); border-radius:8px; padding:6px 10px;
+    font:600 11px var(--mono); cursor:pointer; }
+
+  .pad{ display:grid; grid-template-columns:1fr 1.1fr 1fr; gap:10px;
+    padding:10px 14px 14px; flex:none; }
+  .btn{ border:1px solid var(--line); border-radius:14px;
+    padding:16px 6px; font:800 15px/1 var(--mono); letter-spacing:.08em;
+    text-align:center; background:#0b1712; color:#7aa890;
+    cursor:pointer; }
+  .btn small{ display:block; font-size:9px; font-weight:600;
+    margin-top:5px; opacity:.7; letter-spacing:.06em; }
+  .btn.fill{ background:#16302350; color:var(--txt);
+    border-color:var(--line); }
+  .btn.fill:active{ filter:brightness(1.25); }
+  .btn.buy{ opacity:.4; filter:grayscale(.6); }
+  .btn.sell{ opacity:.4; filter:grayscale(.6); }
+  .btn.buy.armed{ opacity:1; filter:none; color:var(--mint);
+    border-color:var(--mint);
+    background:linear-gradient(180deg,#103224,#0c2419); }
+  .btn.sell.armed{ opacity:1; filter:none; color:var(--red);
+    border-color:var(--red);
+    background:linear-gradient(180deg,#321016,#241015); }
+  .btn.armed:active{ filter:brightness(1.18); }
+  .btn.confirm{ animation:pp .8s ease-in-out infinite; }
+  @keyframes pp{ 50%{ filter:brightness(1.35); } }
+
+  .status{ text-align:center; font-size:11px; color:var(--dim);
+    padding:0 14px 8px; flex:none; min-height:15px; }
+  .status.ok{ color:var(--mint); } .status.err{ color:var(--red); }
+
+  /* setup + symbol sheets */
+  .sheet{ position:fixed; inset:0; background:rgba(3,7,5,.86);
+    display:none; align-items:center; justify-content:center;
+    z-index:50; padding:22px; }
+  .sheet.show{ display:flex; }
+  .box{ background:var(--card); border:1px solid var(--line);
+    border-radius:16px; padding:18px; width:100%; max-width:380px;
+    display:flex; flex-direction:column; gap:12px;
+    max-height:80vh; overflow:auto; }
+  .box h3{ font-size:13px; color:var(--txt); letter-spacing:.08em; }
+  .box label{ font-size:10px; color:var(--dim); letter-spacing:.1em;
+    text-transform:uppercase; }
+  .box input{ width:100%; padding:12px; border-radius:10px;
+    background:#081310; border:1px solid var(--line); color:var(--txt);
+    font:13px var(--mono); margin-top:5px; }
+  .box button.go{ padding:13px; border-radius:10px; border:none;
+    background:linear-gradient(180deg,var(--mint),#1eb863);
+    color:#04130b; font:800 13px var(--mono); cursor:pointer; }
+  .hint{ font-size:11px; color:var(--dim); line-height:1.6; }
+  .warn{ color:#ff9aa2; }
+  .symlist{ display:flex; flex-direction:column; gap:6px; }
+  .symlist button{ text-align:left; padding:11px 13px; border-radius:9px;
+    background:#0a1712; border:1px solid var(--line); color:var(--txt);
+    font:13px var(--mono); cursor:pointer; }
+  .symlist button:active{ border-color:var(--mint); }
+  .seg{ display:flex; gap:8px; }
+  .seg button{ flex:1; padding:9px; border-radius:9px;
+    background:#0a1712; border:1px solid var(--line); color:var(--dim);
+    font:600 12px var(--mono); cursor:pointer; }
+  .seg button.on{ background:var(--mint); color:#04130b;
+    border-color:var(--mint); font-weight:800; }
+</style>
+</head>
+<body>
+
+  <div class="bar">
+    <span class="mk"></span><b>MSA</b>
+    <span class="sym" id="symBtn">— ▾</span>
+    <span class="conn off" id="conn">offline</span>
+    <button class="gear" id="gear">⚙</button>
+  </div>
+
+  <div id="chart">
+    <div class="slpill" id="slPill">SL</div>
+  </div>
+
+  <div class="slrow">
+    <div>
+      <div class="lab">Stop-loss (drag the red line)</div>
+      <div class="val" id="slVal">—</div>
+    </div>
+    <button class="reset" id="slReset">Center SL</button>
+    <div class="dir" id="dir">—</div>
+  </div>
+
+  <div class="pad">
+    <button class="btn buy" id="btnBuy">BUY<small id="buySub">locked</small></button>
+    <button class="btn fill" id="btnFill">FILL<small>set entry/size/TP/SL</small></button>
+    <button class="btn sell" id="btnSell">SELL<small id="sellSub">locked</small></button>
+  </div>
+  <div class="status" id="status">starting…</div>
+
+  <!-- Setup sheet (Firebase URL + key, shared with remote/index.html) -->
+  <div class="sheet" id="setup">
+    <div class="box">
+      <h3>Connect to your laptop</h3>
+      <div class="hint">Same Firebase URL + Pair key you set in the laptop
+        extension (and in the other remote page). Stored only here.</div>
+      <div>
+        <label>Firebase Realtime DB URL</label>
+        <input id="inUrl" placeholder="https://xxxx-default-rtdb.firebaseio.com"
+          autocapitalize="off" autocomplete="off" spellcheck="false">
+      </div>
+      <div>
+        <label>Pair key</label>
+        <input id="inKey" placeholder="shared secret" autocapitalize="off"
+          autocomplete="off" spellcheck="false">
+      </div>
+      <button class="go" id="saveCfg">Save & Connect</button>
+      <div class="hint warn">⚠ Chart price is MEXC market data. Your trade
+        executes on the laptop tab; the exact SL number (not the line
+        position) is what gets sent. Always glance at the laptop result.</div>
+    </div>
+  </div>
+
+  <!-- Symbol sheet -->
+  <div class="sheet" id="symSheet">
+    <div class="box">
+      <h3>Choose market</h3>
+      <div class="seg" id="mkt">
+        <button data-m="futures" class="on">Futures</button>
+        <button data-m="spot">Spot</button>
+      </div>
+      <input id="symSearch" placeholder="search e.g. BTC, ETH, GOLD"
+        autocapitalize="off" autocomplete="off" spellcheck="false">
+      <div class="symlist" id="symList"></div>
+      <div class="hint">Note: “XAUUSD” is a MetaTrader broker symbol. On
+        MEXC, gold trades under its own ticker — pick the real MEXC market
+        that matches what you trade on the laptop.</div>
+    </div>
+  </div>
+
+<script>
+'use strict';
+// ── Shared config (same key as the other remote page) ───────────────
+const LS = 'msa_remote_cfg_v1';
+const LS_SYM = 'msa_chart_sym_v1';
+let cfg = null;
+try { cfg = JSON.parse(localStorage.getItem(LS) || 'null'); } catch (e) {}
+let market = 'futures';
+let symbol = 'BTC_USDT';      // futures format; spot uses BTCUSDT
+try {
+  const sv = JSON.parse(localStorage.getItem(LS_SYM) || 'null');
+  if (sv) { market = sv.market; symbol = sv.symbol; }
+} catch (e) {}
+
+const $ = (id) => document.getElementById(id);
+
+// ── Firebase REST (identical contract to remote/index.html) ─────────
+const dbu = (p) => `${cfg.url}/${p}.json`;
+async function dbGet(p) {
+  const r = await fetch(dbu(p), { cache: 'no-store' });
+  if (!r.ok) throw new Error('get ' + r.status);
+  return r.json();
+}
+async function dbPut(p, v) {
+  const r = await fetch(dbu(p), { method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(v) });
+  if (!r.ok) throw new Error('put ' + r.status);
+  return r.json();
+}
+
+// ── Setup sheet ─────────────────────────────────────────────────────
+function needSetup() { return !(cfg && cfg.url && cfg.key); }
+$('gear').onclick = () => {
+  if (cfg) { $('inUrl').value = cfg.url; $('inKey').value = cfg.key; }
+  $('setup').classList.add('show');
+};
+$('saveCfg').onclick = () => {
+  const url = $('inUrl').value.trim().replace(/\/+$/, '');
+  const key = $('inKey').value.trim();
+  if (!/^https:\/\/.+firebaseio\.com$/.test(url) || key.length < 6) {
+    alert('Enter a valid Firebase URL and a 6+ char key.'); return;
+  }
+  cfg = { url, key };
+  localStorage.setItem(LS, JSON.stringify(cfg));
+  $('setup').classList.remove('show');
+  startBridge();
+};
+if (needSetup()) $('setup').classList.add('show');
+
+// ── Lightweight Charts setup ────────────────────────────────────────
+const chartEl = $('chart');
+const chart = LightweightCharts.createChart(chartEl, {
+  layout: { background: { color: '#070f0c' }, textColor: '#6fa98c' },
+  grid: { vertLines: { color: '#102219' },
+          horzLines: { color: '#102219' } },
+  rightPriceScale: { borderColor: '#1d3729' },
+  timeScale: { borderColor: '#1d3729', timeVisible: true,
+               secondsVisible: false },
+  crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  handleScroll: true, handleScale: true,
+});
+const candle = chart.addCandlestickSeries({
+  upColor: '#2de37e', downColor: '#ff5d6c',
+  wickUpColor: '#2de37e', wickDownColor: '#ff5d6c',
+  borderVisible: false,
+});
+new ResizeObserver(() => chart.applyOptions({
+  width: chartEl.clientWidth, height: chartEl.clientHeight,
+})).observe(chartEl);
+
+// ── Draggable SL price line ─────────────────────────────────────────
+let slPrice = null;
+let slLine = null;
+function drawSL(p) {
+  if (slLine) candle.removePriceLine(slLine);
+  slLine = candle.createPriceLine({
+    price: p, color: '#ff5d6c', lineWidth: 2,
+    lineStyle: LightweightCharts.LineStyle.Solid,
+    axisLabelVisible: true, title: 'SL',
+  });
+}
+function setSL(p, fromUser) {
+  if (p == null || !isFinite(p)) return;
+  const dec = symbol.includes('USD') ? 2 : 4;
+  slPrice = Math.round(p * Math.pow(10, dec)) / Math.pow(10, dec);
+  drawSL(slPrice);
+  $('slVal').textContent = slPrice;
+  // Direction from live price vs SL.
+  recalcDir();
+  if (fromUser) flashStatus('SL = ' + slPrice, 'ok');
+}
+function recalcDir() {
+  const d = (lastPrice == null || slPrice == null) ? null
+    : lastPrice > slPrice ? 'LONG'
+    : lastPrice < slPrice ? 'SHORT' : null;
+  $('dir').textContent = d || '—';
+  $('dir').className = 'dir ' + (d === 'LONG' ? 'long'
+    : d === 'SHORT' ? 'short' : '');
+  $('btnBuy').classList.toggle('armed', d === 'LONG');
+  $('btnSell').classList.toggle('armed', d === 'SHORT');
+  $('buySub').textContent = d === 'LONG' ? 'tap to buy' : 'locked';
+  $('sellSub').textContent = d === 'SHORT' ? 'tap to sell' : 'locked';
+}
+
+// Drag: press on the chart and move vertically to place the SL where
+// your finger is. We convert the Y pixel to a price via the series.
+let dragging = false;
+function yToPrice(clientY) {
+  const rect = chartEl.getBoundingClientRect();
+  const y = clientY - rect.top;
+  const p = candle.coordinateToPrice(y);
+  return p == null ? null : p;
+}
+let pressTimer = null;
+chartEl.addEventListener('touchstart', (e) => {
+  // Long-press (250ms) starts SL drag so normal scroll still works.
+  pressTimer = setTimeout(() => {
+    dragging = true;
+    const p = yToPrice(e.touches[0].clientY);
+    if (p != null) setSL(p, true);
+    navigator.vibrate && navigator.vibrate(15);
+  }, 250);
+}, { passive: true });
+chartEl.addEventListener('touchmove', (e) => {
+  if (!dragging) { clearTimeout(pressTimer); return; }
+  e.preventDefault();
+  const p = yToPrice(e.touches[0].clientY);
+  if (p != null) setSL(p, false);
+}, { passive: false });
+chartEl.addEventListener('touchend', () => {
+  clearTimeout(pressTimer);
+  if (dragging) { dragging = false; flashStatus('SL set ' + slPrice, 'ok'); }
+});
+// Mouse (for tablet/desktop testing)
+let mDown = false;
+chartEl.addEventListener('mousedown', (e) => {
+  if (e.shiftKey) { mDown = true; const p = yToPrice(e.clientY);
+    if (p != null) setSL(p, true); }
+});
+chartEl.addEventListener('mousemove', (e) => {
+  if (mDown) { const p = yToPrice(e.clientY);
+    if (p != null) setSL(p, false); }
+});
+window.addEventListener('mouseup', () => { mDown = false; });
+
+$('slReset').onclick = () => {
+  if (lastPrice != null) setSL(lastPrice, true);
+};
+
+// ── MEXC PUBLIC market data ─────────────────────────────────────────
+// Futures klines:  https://contract.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min1
+// Spot klines:     https://api.mexc.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=500
+let lastPrice = null;
+let pollKlT = null;
+
+async function loadKlines() {
+  try {
+    let bars = [];
+    if (market === 'futures') {
+      const u = `https://contract.mexc.com/api/v1/contract/kline/${symbol}`
+        + `?interval=Min1`;
+      const j = await (await fetch(u, { cache: 'no-store' })).json();
+      // Futures returns columns: time[], open[], close[], high[], low[], vol[]
+      const d = j.data || j;
+      if (d && d.time) {
+        for (let i = 0; i < d.time.length; i++) {
+          bars.push({ time: d.time[i], open: +d.open[i],
+            high: +d.high[i], low: +d.low[i], close: +d.close[i] });
+        }
+      }
+    } else {
+      const u = `https://api.mexc.com/api/v3/klines?symbol=${symbol}`
+        + `&interval=1m&limit=500`;
+      const a = await (await fetch(u, { cache: 'no-store' })).json();
+      bars = a.map((k) => ({ time: Math.floor(k[0] / 1000),
+        open: +k[1], high: +k[2], low: +k[3], close: +k[4] }));
+    }
+    if (bars.length) {
+      candle.setData(bars);
+      const last = bars[bars.length - 1];
+      lastPrice = last.close;
+      onPrice();
+      if (slPrice == null) setSL(lastPrice, false);
+      chart.timeScale().fitContent();
+    }
+    flashStatus('chart loaded · ' + symbol, 'ok');
+  } catch (e) {
+    flashStatus('chart load failed: ' + e.message
+      + ' (try the other market)', 'err');
+  }
+}
+
+async function tickPrice() {
+  try {
+    if (market === 'futures') {
+      const u = `https://contract.mexc.com/api/v1/contract/ticker`
+        + `?symbol=${symbol}`;
+      const j = await (await fetch(u, { cache: 'no-store' })).json();
+      const d = j.data || j;
+      const p = d && (d.lastPrice || d.last || d.fairPrice);
+      if (p) { lastPrice = +p; onPrice(); }
+    } else {
+      const u = `https://api.mexc.com/api/v3/ticker/price?symbol=${symbol}`;
+      const j = await (await fetch(u, { cache: 'no-store' })).json();
+      if (j && j.price) { lastPrice = +j.price; onPrice(); }
+    }
+  } catch (e) { /* transient */ }
+}
+
+let lastBarTime = null;
+function onPrice() {
+  if (lastPrice == null) return;
+  $('symBtn').textContent = symbol + ' ' + lastPrice + ' ▾';
+  // Update the forming candle's close so the chart feels live.
+  const t = Math.floor(Date.now() / 60000) * 60;
+  candle.update({ time: t, open: lastPrice, high: lastPrice,
+    low: lastPrice, close: lastPrice });
+  recalcDir();
+}
+
+// ── Symbol picker ───────────────────────────────────────────────────
+$('symBtn').onclick = () => { openSymbols(); };
+let allSymbols = [];
+async function fetchSymbols() {
+  try {
+    if (market === 'futures') {
+      const j = await (await fetch(
+        'https://contract.mexc.com/api/v1/contract/detail',
+        { cache: 'no-store' })).json();
+      allSymbols = (j.data || []).map((c) => c.symbol).filter(Boolean);
+    } else {
+      const j = await (await fetch(
+        'https://api.mexc.com/api/v3/defaultSymbols',
+        { cache: 'no-store' })).json();
+      allSymbols = (j.data || j.symbols || j) || [];
+    }
+  } catch (e) { allSymbols = []; }
+  renderSymbols('');
+}
+function renderSymbols(q) {
+  const list = $('symList');
+  list.innerHTML = '';
+  const f = allSymbols
+    .filter((s) => s.toUpperCase().includes(q.toUpperCase()))
+    .slice(0, 40);
+  if (!f.length) {
+    list.innerHTML = '<div class="hint">No match. '
+      + 'Try the other market or a different search.</div>';
+    return;
+  }
+  for (const s of f) {
+    const b = document.createElement('button');
+    b.textContent = s;
+    b.onclick = () => {
+      symbol = s;
+      localStorage.setItem(LS_SYM, JSON.stringify({ market, symbol }));
+      $('symSheet').classList.remove('show');
+      slPrice = null;
+      loadKlines();
+    };
+    list.appendChild(b);
+  }
+}
+function openSymbols() {
+  $('symSheet').classList.add('show');
+  if (!allSymbols.length) fetchSymbols(); else renderSymbols('');
+}
+$('symSearch').addEventListener('input',
+  (e) => renderSymbols(e.target.value));
+document.querySelectorAll('#mkt button').forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll('#mkt button')
+      .forEach((x) => x.classList.toggle('on', x === b));
+    market = b.dataset.m;
+    symbol = market === 'futures' ? 'BTC_USDT' : 'BTCUSDT';
+    fetchSymbols();
+  };
+});
+
+// ── Connection health ───────────────────────────────────────────────
+let lastStateAt = 0;
+function setConn(s) {
+  $('conn').className = 'conn ' + s;
+  $('conn').textContent = s === 'live' ? 'live'
+    : s === 'off' ? 'offline' : 'stale';
+}
+setInterval(() => {
+  const age = Date.now() - lastStateAt;
+  setConn(!lastStateAt ? 'off' : age < 4000 ? 'live'
+    : age < 15000 ? 'stale' : 'off');
+}, 1000);
+
+// ── Bridge: poll laptop state, send commands (same as remote page) ──
+let pollT = null;
+async function poll() {
+  if (!cfg) return;
+  try {
+    const s = await dbGet('state');
+    if (s && s.key === cfg.key) {
+      lastStateAt = Date.now();
+      if (s.symbol) { /* laptop's symbol shown only as status */ }
+    }
+  } catch (e) { /* keep trying */ }
+}
+function startBridge() {
+  if (pollT) clearInterval(pollT);
+  if (pollKlT) clearInterval(pollKlT);
+  if (!cfg) return;
+  poll(); pollT = setInterval(poll, 900);
+  loadKlines();
+  pollKlT = setInterval(tickPrice, 1500);
+}
+
+let busy = false;
+async function sendCmd(verb) {
+  if (!cfg) { $('setup').classList.add('show'); return; }
+  if (busy) return;
+  if ((verb === 'buy' || verb === 'sell' || verb === 'fill')
+      && slPrice == null) {
+    flashStatus('Set the SL line first', 'err'); return;
+  }
+  busy = true;
+  const id = 'c' + Date.now() + '_'
+    + Math.random().toString(36).slice(2, 7);
+  flashStatus('sending ' + verb + '…', '');
+  try {
+    await dbPut('cmd', { id, verb, key: cfg.key,
+      ts: Date.now(), sl: slPrice });
+    const t0 = Date.now();
+    while (Date.now() - t0 < 6000) {
+      await new Promise((r) => setTimeout(r, 400));
+      let ack;
+      try { ack = await dbGet('ack'); } catch (e) { continue; }
+      if (ack && ack.id === id) {
+        flashStatus((ack.ok ? '✓ ' : '✗ ')
+          + (ack.reason || (ack.ok ? 'done' : 'failed')),
+          ack.ok ? 'ok' : 'err');
+        busy = false; return;
+      }
+    }
+    flashStatus('⚠ no reply — check laptop & MEXC tab', 'err');
+  } catch (e) {
+    flashStatus('✗ ' + e.message, 'err');
+  }
+  busy = false;
+}
+
+// Two-step confirm for BUY/SELL (matches the rest of the system).
+let pend = null, pendT = null;
+function tradeTap(side, btn) {
+  if (!btn.classList.contains('armed')) {
+    flashStatus(side + ' locked — SL implies the other side', 'err');
+    return;
+  }
+  if (pend === side) {
+    clearTimeout(pendT); pend = null;
+    btn.classList.remove('confirm');
+    sendCmd(side === 'LONG' ? 'buy' : 'sell');
+    return;
+  }
+  pend = side;
+  btn.classList.add('confirm');
+  flashStatus('Tap ' + (side === 'LONG' ? 'BUY' : 'SELL')
+    + ' again to confirm', 'err');
+  clearTimeout(pendT);
+  pendT = setTimeout(() => {
+    pend = null; btn.classList.remove('confirm');
+  }, 2500);
+}
+$('btnBuy').onclick = () => tradeTap('LONG', $('btnBuy'));
+$('btnSell').onclick = () => tradeTap('SHORT', $('btnSell'));
+$('btnFill').onclick = () => sendCmd('fill');
+
+let stTimer = null;
+function flashStatus(msg, cls) {
+  const s = $('status');
+  s.textContent = msg;
+  s.className = 'status ' + (cls || '');
+}
+
+// ── Go ──────────────────────────────────────────────────────────────
+if (!needSetup()) startBridge();
+else flashStatus('Tap ⚙ to connect to your laptop', '');
+</script>
+</body>
+</html>
