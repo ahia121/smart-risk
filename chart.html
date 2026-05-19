@@ -1,13 +1,10 @@
 <!doctype html>
 <!-- ╔════════════════════════════════════════════════════════════════╗
-     ║ MODULE K · PHONE CHART (PWA)                                     ║
-     ║ A TradingView-style candlestick chart for phone/tablet, fed by   ║
-     ║ MEXC's PUBLIC market API (no key — market data only). A draggable ║
-     ║ red SL line gives a live stop price. Three buttons (FILL/BUY/    ║
-     ║ SELL) reuse the SAME proven Firebase bridge as remote/index.html ║
-     ║ so the laptop extension still does every real action behind its  ║
-     ║ safety guards. Chart price is MARKET price; the SL is sent as an  ║
-     ║ exact NUMBER, never as a chart position.                        ║
+     ║ MODULE K · PHONE CHART (PWA) — v2                                 ║
+     ║ Deterministic layout (no flex-collapse), prebuilt watchlist,      ║
+     ║ 1m/5m timeframes, up to 600 candles via MEXC PUBLIC futures API,  ║
+     ║ draggable red SL line, 3 buttons (FILL/BUY/SELL) over the SAME    ║
+     ║ proven Firebase bridge. Robust loaders with explicit errors.     ║
      ╚════════════════════════════════════════════════════════════════╝ -->
 <html lang="en">
 <head>
@@ -24,60 +21,73 @@
     --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace; }
   *{ box-sizing:border-box; margin:0; padding:0;
      -webkit-tap-highlight-color:transparent; }
-  html,body{ height:100%; }
+  html,body{ height:100%; width:100%; overflow:hidden; }
   body{ background:var(--bg); color:var(--txt);
-    font-family:var(--mono); display:flex; flex-direction:column;
-    overflow:hidden; padding-top:env(safe-area-inset-top);
-    padding-bottom:env(safe-area-inset-bottom); }
+    font-family:var(--mono); }
 
-  .bar{ display:flex; align-items:center; gap:10px; padding:10px 14px;
-    border-bottom:1px solid var(--line); flex:none; }
-  .mk{ width:11px;height:11px;border-radius:4px;
+  /* Absolute, pixel-deterministic layout. No flexbox collapse — that
+     was why the chart box was broken on the phone. Every region has a
+     fixed height; #chart fills whatever is left, computed in JS. */
+  #app{ position:fixed; inset:0;
+    padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+
+  #bar{ height:46px; display:flex; align-items:center; gap:9px;
+    padding:0 12px; border-bottom:1px solid var(--line); }
+  .mk{ width:10px;height:10px;border-radius:3px;
     background:linear-gradient(135deg,var(--mint),#1eb863);
-    box-shadow:0 0 10px rgba(45,227,126,.5); }
-  .bar b{ font-size:13px; letter-spacing:.05em; }
-  .sym{ margin-left:2px; font-size:12px; color:var(--dim);
-    border:1px solid var(--line); border-radius:999px;
-    padding:4px 12px; background:#0a1712; cursor:pointer; }
-  .sym.on{ color:var(--mint); border-color:#245c43; }
-  .conn{ margin-left:auto; font-size:10px; padding:3px 9px;
-    border-radius:999px; border:1px solid var(--line); color:var(--dim); }
-  .conn.live{ color:var(--mint); border-color:#245c43;
+    box-shadow:0 0 9px rgba(45,227,126,.5); flex:none; }
+  #bar b{ font-size:13px; letter-spacing:.04em; flex:none; }
+  #symBtn{ font-size:12px; color:var(--mint);
+    border:1px solid #245c43; border-radius:999px; padding:4px 11px;
+    background:#0a1712; cursor:pointer; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; max-width:46vw; }
+  .tf{ display:flex; gap:5px; margin-left:2px; flex:none; }
+  .tf button{ font:600 11px var(--mono); color:var(--dim);
+    background:#0a1712; border:1px solid var(--line);
+    border-radius:7px; padding:5px 9px; cursor:pointer; }
+  .tf button.on{ color:#04130b; background:var(--mint);
+    border-color:var(--mint); font-weight:800; }
+  #conn{ margin-left:auto; font-size:10px; padding:3px 8px;
+    border-radius:999px; border:1px solid var(--line);
+    color:var(--dim); flex:none; }
+  #conn.live{ color:var(--mint); border-color:#245c43;
     background:rgba(45,227,126,.08); }
-  .conn.off{ color:var(--red); border-color:#5a2730; }
-  .gear{ background:none;border:none;color:var(--dim);font-size:17px;
-    padding:3px 6px;cursor:pointer; }
+  #conn.off{ color:var(--red); border-color:#5a2730; }
+  #gear{ background:none;border:none;color:var(--dim);font-size:16px;
+    padding:2px 5px;cursor:pointer; flex:none; }
 
-  #chart{ flex:1; position:relative; min-height:0; }
-  .slpill{ position:absolute; right:8px; z-index:5; transform:
-    translateY(-50%); background:var(--red); color:#fff; font-weight:700;
-    font-size:12px; padding:3px 8px; border-radius:6px; display:none;
-    pointer-events:none; box-shadow:0 2px 8px rgba(0,0,0,.5); }
+  #chart{ position:absolute; left:0; right:0;
+    background:#070f0c; }
+  #chartMsg{ position:absolute; inset:0; display:flex;
+    align-items:center; justify-content:center; text-align:center;
+    color:var(--dim); font-size:13px; padding:24px; line-height:1.7;
+    pointer-events:none; }
+  #chartMsg.hide{ display:none; }
 
-  .slrow{ display:flex; align-items:center; gap:10px; padding:8px 14px;
-    border-top:1px solid var(--line); flex:none; font-size:12px; }
-  .slrow .lab{ color:var(--dim); letter-spacing:.08em;
-    text-transform:uppercase; font-size:10px; }
-  .slrow .val{ color:var(--red); font-weight:800; font-size:17px; }
-  .slrow .dir{ margin-left:auto; font-weight:800; font-size:13px; }
-  .dir.long{ color:var(--mint); } .dir.short{ color:var(--red); }
-  .reset{ background:#12241b; border:1px solid var(--line);
-    color:var(--mint); border-radius:8px; padding:6px 10px;
+  #slrow{ position:absolute; left:0; right:0; height:52px;
+    display:flex; align-items:center; gap:10px; padding:0 14px;
+    border-top:1px solid var(--line); }
+  #slrow .lab{ color:var(--dim); font-size:9px; letter-spacing:.08em;
+    text-transform:uppercase; }
+  #slrow .val{ color:var(--red); font-weight:800; font-size:18px; }
+  #slReset{ background:#12241b; border:1px solid var(--line);
+    color:var(--mint); border-radius:8px; padding:7px 11px;
     font:600 11px var(--mono); cursor:pointer; }
+  #dir{ margin-left:auto; font-weight:800; font-size:14px; }
+  #dir.long{ color:var(--mint); } #dir.short{ color:var(--red); }
 
-  .pad{ display:grid; grid-template-columns:1fr 1.1fr 1fr; gap:10px;
-    padding:10px 14px 14px; flex:none; }
+  #pad{ position:absolute; left:0; right:0; height:78px;
+    display:grid; grid-template-columns:1fr 1.15fr 1fr; gap:10px;
+    padding:0 14px; }
   .btn{ border:1px solid var(--line); border-radius:14px;
-    padding:16px 6px; font:800 15px/1 var(--mono); letter-spacing:.08em;
-    text-align:center; background:#0b1712; color:#7aa890;
-    cursor:pointer; }
-  .btn small{ display:block; font-size:9px; font-weight:600;
-    margin-top:5px; opacity:.7; letter-spacing:.06em; }
-  .btn.fill{ background:#16302350; color:var(--txt);
-    border-color:var(--line); }
+    font:800 15px/1 var(--mono); letter-spacing:.06em;
+    background:#0b1712; color:#7aa890; cursor:pointer;
+    display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:5px; }
+  .btn small{ font-size:9px; font-weight:600; opacity:.7; }
+  .btn.fill{ background:#16302350; color:var(--txt); }
   .btn.fill:active{ filter:brightness(1.25); }
-  .btn.buy{ opacity:.4; filter:grayscale(.6); }
-  .btn.sell{ opacity:.4; filter:grayscale(.6); }
+  .btn.buy,.btn.sell{ opacity:.4; filter:grayscale(.6); }
   .btn.buy.armed{ opacity:1; filter:none; color:var(--mint);
     border-color:var(--mint);
     background:linear-gradient(180deg,#103224,#0c2419); }
@@ -86,498 +96,505 @@
     background:linear-gradient(180deg,#321016,#241015); }
   .btn.armed:active{ filter:brightness(1.18); }
   .btn.confirm{ animation:pp .8s ease-in-out infinite; }
-  @keyframes pp{ 50%{ filter:brightness(1.35); } }
+  @keyframes pp{ 50%{ filter:brightness(1.4); } }
 
-  .status{ text-align:center; font-size:11px; color:var(--dim);
-    padding:0 14px 8px; flex:none; min-height:15px; }
-  .status.ok{ color:var(--mint); } .status.err{ color:var(--red); }
+  #status{ position:absolute; left:0; right:0; height:22px;
+    text-align:center; font-size:11px; color:var(--dim);
+    line-height:22px; overflow:hidden; }
+  #status.ok{ color:var(--mint); } #status.err{ color:var(--red); }
 
-  /* setup + symbol sheets */
-  .sheet{ position:fixed; inset:0; background:rgba(3,7,5,.86);
-    display:none; align-items:center; justify-content:center;
-    z-index:50; padding:22px; }
+  .sheet{ position:fixed; inset:0; background:rgba(3,7,5,.88);
+    display:none; align-items:flex-start; justify-content:center;
+    z-index:50; padding:20px; overflow:auto; }
   .sheet.show{ display:flex; }
   .box{ background:var(--card); border:1px solid var(--line);
-    border-radius:16px; padding:18px; width:100%; max-width:380px;
-    display:flex; flex-direction:column; gap:12px;
-    max-height:80vh; overflow:auto; }
-  .box h3{ font-size:13px; color:var(--txt); letter-spacing:.08em; }
-  .box label{ font-size:10px; color:var(--dim); letter-spacing:.1em;
+    border-radius:16px; padding:18px; width:100%; max-width:400px;
+    display:flex; flex-direction:column; gap:12px; margin-top:8vh; }
+  .box h3{ font-size:13px; letter-spacing:.06em; }
+  .box label{ font-size:10px; color:var(--dim); letter-spacing:.08em;
     text-transform:uppercase; }
   .box input{ width:100%; padding:12px; border-radius:10px;
     background:#081310; border:1px solid var(--line); color:var(--txt);
     font:13px var(--mono); margin-top:5px; }
-  .box button.go{ padding:13px; border-radius:10px; border:none;
+  .box .go{ padding:13px; border-radius:10px; border:none;
     background:linear-gradient(180deg,var(--mint),#1eb863);
     color:#04130b; font:800 13px var(--mono); cursor:pointer; }
   .hint{ font-size:11px; color:var(--dim); line-height:1.6; }
   .warn{ color:#ff9aa2; }
-  .symlist{ display:flex; flex-direction:column; gap:6px; }
-  .symlist button{ text-align:left; padding:11px 13px; border-radius:9px;
-    background:#0a1712; border:1px solid var(--line); color:var(--txt);
-    font:13px var(--mono); cursor:pointer; }
-  .symlist button:active{ border-color:var(--mint); }
   .seg{ display:flex; gap:8px; }
-  .seg button{ flex:1; padding:9px; border-radius:9px;
-    background:#0a1712; border:1px solid var(--line); color:var(--dim);
+  .seg button{ flex:1; padding:9px; border-radius:9px; background:#0a1712;
+    border:1px solid var(--line); color:var(--dim);
     font:600 12px var(--mono); cursor:pointer; }
   .seg button.on{ background:var(--mint); color:#04130b;
     border-color:var(--mint); font-weight:800; }
+  .wl{ display:flex; flex-direction:column; gap:6px; max-height:46vh;
+    overflow:auto; }
+  .wl button{ display:flex; justify-content:space-between;
+    align-items:center; text-align:left; padding:12px 13px;
+    border-radius:9px; background:#0a1712; border:1px solid var(--line);
+    color:var(--txt); font:13px var(--mono); cursor:pointer; }
+  .wl button:active{ border-color:var(--mint); }
+  .wl button .t{ color:var(--dim); font-size:11px; }
+  .wl button.sel{ border-color:var(--mint); color:var(--mint); }
 </style>
 </head>
 <body>
+<div id="app">
 
-  <div class="bar">
+  <div id="bar">
     <span class="mk"></span><b>MSA</b>
-    <span class="sym" id="symBtn">— ▾</span>
-    <span class="conn off" id="conn">offline</span>
-    <button class="gear" id="gear">⚙</button>
+    <span id="symBtn">—</span>
+    <div class="tf" id="tf">
+      <button data-i="Min1" class="on">1m</button>
+      <button data-i="Min5">5m</button>
+    </div>
+    <span id="conn" class="off">offline</span>
+    <button id="gear">⚙</button>
   </div>
 
   <div id="chart">
-    <div class="slpill" id="slPill">SL</div>
+    <div id="chartMsg">Loading chart…</div>
   </div>
 
-  <div class="slrow">
+  <div id="slrow">
     <div>
-      <div class="lab">Stop-loss (drag the red line)</div>
+      <div class="lab">SL — long-press chart &amp; drag</div>
       <div class="val" id="slVal">—</div>
     </div>
-    <button class="reset" id="slReset">Center SL</button>
-    <div class="dir" id="dir">—</div>
+    <button id="slReset">Center SL</button>
+    <div id="dir">—</div>
   </div>
 
-  <div class="pad">
+  <div id="pad">
     <button class="btn buy" id="btnBuy">BUY<small id="buySub">locked</small></button>
-    <button class="btn fill" id="btnFill">FILL<small>set entry/size/TP/SL</small></button>
+    <button class="btn fill" id="btnFill">FILL<small>entry·size·TP·SL</small></button>
     <button class="btn sell" id="btnSell">SELL<small id="sellSub">locked</small></button>
   </div>
-  <div class="status" id="status">starting…</div>
 
-  <!-- Setup sheet (Firebase URL + key, shared with remote/index.html) -->
-  <div class="sheet" id="setup">
-    <div class="box">
-      <h3>Connect to your laptop</h3>
-      <div class="hint">Same Firebase URL + Pair key you set in the laptop
-        extension (and in the other remote page). Stored only here.</div>
-      <div>
-        <label>Firebase Realtime DB URL</label>
-        <input id="inUrl" placeholder="https://xxxx-default-rtdb.firebaseio.com"
-          autocapitalize="off" autocomplete="off" spellcheck="false">
-      </div>
-      <div>
-        <label>Pair key</label>
-        <input id="inKey" placeholder="shared secret" autocapitalize="off"
-          autocomplete="off" spellcheck="false">
-      </div>
-      <button class="go" id="saveCfg">Save & Connect</button>
-      <div class="hint warn">⚠ Chart price is MEXC market data. Your trade
-        executes on the laptop tab; the exact SL number (not the line
-        position) is what gets sent. Always glance at the laptop result.</div>
-    </div>
-  </div>
+  <div id="status">starting…</div>
+</div>
 
-  <!-- Symbol sheet -->
-  <div class="sheet" id="symSheet">
-    <div class="box">
-      <h3>Choose market</h3>
-      <div class="seg" id="mkt">
-        <button data-m="futures" class="on">Futures</button>
-        <button data-m="spot">Spot</button>
-      </div>
-      <input id="symSearch" placeholder="search e.g. BTC, ETH, GOLD"
-        autocapitalize="off" autocomplete="off" spellcheck="false">
-      <div class="symlist" id="symList"></div>
-      <div class="hint">Note: “XAUUSD” is a MetaTrader broker symbol. On
-        MEXC, gold trades under its own ticker — pick the real MEXC market
-        that matches what you trade on the laptop.</div>
-    </div>
+<!-- Setup -->
+<div class="sheet" id="setup">
+  <div class="box">
+    <h3>Connect to your laptop</h3>
+    <div class="hint">Same Firebase URL + Pair key as the laptop
+      extension and the other remote page. Stored only on this phone.</div>
+    <div><label>Firebase Realtime DB URL</label>
+      <input id="inUrl" placeholder="https://xxxx-default-rtdb.firebaseio.com"
+        autocapitalize="off" autocomplete="off" spellcheck="false"></div>
+    <div><label>Pair key</label>
+      <input id="inKey" placeholder="shared secret" autocapitalize="off"
+        autocomplete="off" spellcheck="false"></div>
+    <button class="go" id="saveCfg">Save &amp; Connect</button>
+    <div class="hint warn">⚠ Chart shows MEXC market data. The trade runs
+      on the laptop tab; the exact SL number (not the line position) is
+      sent. Always glance at the laptop result.</div>
   </div>
+</div>
+
+<!-- Watchlist / symbol picker -->
+<div class="sheet" id="symSheet">
+  <div class="box">
+    <h3>Watchlist</h3>
+    <div class="seg" id="mkt">
+      <button data-m="futures" class="on">Futures</button>
+      <button data-m="spot">Spot</button>
+    </div>
+    <input id="symSearch" placeholder="search any market e.g. PEPE"
+      autocapitalize="off" autocomplete="off" spellcheck="false">
+    <div class="wl" id="wl"></div>
+    <div class="hint">Prebuilt list loads instantly. Use search to pick
+      any other MEXC market. “XAUUSD” is a MetaTrader name — on MEXC gold
+      is the listed metal token shown below.</div>
+  </div>
+</div>
 
 <script>
 'use strict';
-// ── Shared config (same key as the other remote page) ───────────────
-const LS = 'msa_remote_cfg_v1';
-const LS_SYM = 'msa_chart_sym_v1';
-let cfg = null;
-try { cfg = JSON.parse(localStorage.getItem(LS) || 'null'); } catch (e) {}
-let market = 'futures';
-let symbol = 'BTC_USDT';      // futures format; spot uses BTCUSDT
-try {
-  const sv = JSON.parse(localStorage.getItem(LS_SYM) || 'null');
-  if (sv) { market = sv.market; symbol = sv.symbol; }
-} catch (e) {}
+const LS='msa_remote_cfg_v1', LS_SYM='msa_chart_sym_v2';
+let cfg=null; try{cfg=JSON.parse(localStorage.getItem(LS)||'null');}catch(e){}
+let market='futures', interval='Min1', symbol='BTC_USDT';
+try{const s=JSON.parse(localStorage.getItem(LS_SYM)||'null');
+  if(s){market=s.market;symbol=s.symbol;interval=s.interval||'Min1';}}catch(e){}
 
-const $ = (id) => document.getElementById(id);
+const $=(id)=>document.getElementById(id);
 
-// ── Firebase REST (identical contract to remote/index.html) ─────────
-const dbu = (p) => `${cfg.url}/${p}.json`;
-async function dbGet(p) {
-  const r = await fetch(dbu(p), { cache: 'no-store' });
-  if (!r.ok) throw new Error('get ' + r.status);
-  return r.json();
-}
-async function dbPut(p, v) {
-  const r = await fetch(dbu(p), { method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(v) });
-  if (!r.ok) throw new Error('put ' + r.status);
-  return r.json();
-}
-
-// ── Setup sheet ─────────────────────────────────────────────────────
-function needSetup() { return !(cfg && cfg.url && cfg.key); }
-$('gear').onclick = () => {
-  if (cfg) { $('inUrl').value = cfg.url; $('inKey').value = cfg.key; }
-  $('setup').classList.add('show');
+// ── Prebuilt watchlist (your requested coins) ───────────────────────
+// Futures use UNDERSCORE (BTC_USDT); spot uses joined (BTCUSDT).
+// Gold/Silver on MEXC trade as tokenised metals: XAUT (Tether Gold),
+// and there is no liquid silver future — we map to the spot token if
+// futures is missing (handled at load time with a fallback message).
+const WATCH = {
+  futures: [
+    ['BTC_USDT','Bitcoin'], ['XAUT_USDT','Gold (XAUT)'],
+    ['SOL_USDT','Solana'], ['DOGE_USDT','Dogecoin'],
+    ['XRP_USDT','Ripple'], ['ETH_USDT','Ethereum'],
+    ['TAU_USDT','TAU'], ['AG_USDT','Silver (AG)'],
+  ],
+  spot: [
+    ['BTCUSDT','Bitcoin'], ['XAUTUSDT','Gold (XAUT)'],
+    ['SOLUSDT','Solana'], ['DOGEUSDT','Dogecoin'],
+    ['XRPUSDT','Ripple'], ['ETHUSDT','Ethereum'],
+    ['TAUUSDT','TAU'],
+  ],
 };
-$('saveCfg').onclick = () => {
-  const url = $('inUrl').value.trim().replace(/\/+$/, '');
-  const key = $('inKey').value.trim();
-  if (!/^https:\/\/.+firebaseio\.com$/.test(url) || key.length < 6) {
-    alert('Enter a valid Firebase URL and a 6+ char key.'); return;
-  }
-  cfg = { url, key };
-  localStorage.setItem(LS, JSON.stringify(cfg));
-  $('setup').classList.remove('show');
-  startBridge();
-};
-if (needSetup()) $('setup').classList.add('show');
 
-// ── Lightweight Charts setup ────────────────────────────────────────
-const chartEl = $('chart');
-const chart = LightweightCharts.createChart(chartEl, {
-  layout: { background: { color: '#070f0c' }, textColor: '#6fa98c' },
-  grid: { vertLines: { color: '#102219' },
-          horzLines: { color: '#102219' } },
-  rightPriceScale: { borderColor: '#1d3729' },
-  timeScale: { borderColor: '#1d3729', timeVisible: true,
-               secondsVisible: false },
-  crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-  handleScroll: true, handleScale: true,
-});
-const candle = chart.addCandlestickSeries({
-  upColor: '#2de37e', downColor: '#ff5d6c',
-  wickUpColor: '#2de37e', wickDownColor: '#ff5d6c',
-  borderVisible: false,
-});
-new ResizeObserver(() => chart.applyOptions({
-  width: chartEl.clientWidth, height: chartEl.clientHeight,
-})).observe(chartEl);
+// ── Firebase REST (same contract as remote/index.html) ──────────────
+const dbu=(p)=>`${cfg.url}/${p}.json`;
+async function dbGet(p){const r=await fetch(dbu(p),{cache:'no-store'});
+  if(!r.ok)throw new Error('get '+r.status);return r.json();}
+async function dbPut(p,v){const r=await fetch(dbu(p),{method:'PUT',
+  headers:{'Content-Type':'application/json'},body:JSON.stringify(v)});
+  if(!r.ok)throw new Error('put '+r.status);return r.json();}
 
-// ── Draggable SL price line ─────────────────────────────────────────
-let slPrice = null;
-let slLine = null;
-function drawSL(p) {
-  if (slLine) candle.removePriceLine(slLine);
-  slLine = candle.createPriceLine({
-    price: p, color: '#ff5d6c', lineWidth: 2,
-    lineStyle: LightweightCharts.LineStyle.Solid,
-    axisLabelVisible: true, title: 'SL',
+// ── Layout: compute #chart height in PIXELS (no flex collapse) ──────
+function layout(){
+  const app=$('app');
+  const top=app.offsetTop;
+  const H=app.clientHeight;
+  const barH=46, slH=52, padH=78, stH=22;
+  const chartTop=barH;
+  const chartH=Math.max(120, H-barH-slH-padH-stH);
+  const c=$('chart');
+  c.style.top=chartTop+'px';
+  c.style.height=chartH+'px';
+  $('slrow').style.top=(barH+chartH)+'px';
+  $('pad').style.top=(barH+chartH+slH)+'px';
+  $('status').style.top=(barH+chartH+slH+padH)+'px';
+  if(chart){ chart.applyOptions({width:c.clientWidth,height:chartH}); }
+}
+
+// ── Lightweight Charts ──────────────────────────────────────────────
+let chart=null, candle=null;
+function initChart(){
+  chart=LightweightCharts.createChart($('chart'),{
+    layout:{background:{color:'#070f0c'},textColor:'#6fa98c',
+      fontFamily:'monospace'},
+    grid:{vertLines:{color:'#0f2018'},horzLines:{color:'#0f2018'}},
+    rightPriceScale:{borderColor:'#1d3729',scaleMargins:{top:.08,bottom:.08}},
+    timeScale:{borderColor:'#1d3729',timeVisible:true,
+      secondsVisible:false,rightOffset:4},
+    crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
+    handleScroll:{mouseWheel:true,pressedMouseMove:true,
+      horzTouchDrag:true,vertTouchDrag:false},
+    handleScale:{axisPressedMouseMove:true,mouseWheel:true,
+      pinch:true},
+  });
+  candle=chart.addCandlestickSeries({
+    upColor:'#2de37e',downColor:'#ff5d6c',
+    wickUpColor:'#2de37e',wickDownColor:'#ff5d6c',
+    borderVisible:false,
+    priceFormat:{type:'price',precision:2,minMove:0.01},
   });
 }
-function setSL(p, fromUser) {
-  if (p == null || !isFinite(p)) return;
-  const dec = symbol.includes('USD') ? 2 : 4;
-  slPrice = Math.round(p * Math.pow(10, dec)) / Math.pow(10, dec);
-  drawSL(slPrice);
-  $('slVal').textContent = slPrice;
-  // Direction from live price vs SL.
+
+// ── SL price line (draggable) ───────────────────────────────────────
+let slPrice=null, slLine=null, lastPrice=null;
+function priceDec(){
+  if(lastPrice==null) return 2;
+  if(lastPrice<1) return 6;
+  if(lastPrice<20) return 4;
+  return 2;
+}
+function drawSL(p){
+  if(slLine) candle.removePriceLine(slLine);
+  slLine=candle.createPriceLine({price:p,color:'#ff5d6c',lineWidth:2,
+    lineStyle:LightweightCharts.LineStyle.Solid,
+    axisLabelVisible:true,title:'SL'});
+}
+function setSL(p,user){
+  if(p==null||!isFinite(p)) return;
+  const f=Math.pow(10,priceDec());
+  slPrice=Math.round(p*f)/f;
+  if(candle) drawSL(slPrice);
+  $('slVal').textContent=slPrice;
   recalcDir();
-  if (fromUser) flashStatus('SL = ' + slPrice, 'ok');
+  if(user) flash('SL = '+slPrice,'ok');
 }
-function recalcDir() {
-  const d = (lastPrice == null || slPrice == null) ? null
-    : lastPrice > slPrice ? 'LONG'
-    : lastPrice < slPrice ? 'SHORT' : null;
-  $('dir').textContent = d || '—';
-  $('dir').className = 'dir ' + (d === 'LONG' ? 'long'
-    : d === 'SHORT' ? 'short' : '');
-  $('btnBuy').classList.toggle('armed', d === 'LONG');
-  $('btnSell').classList.toggle('armed', d === 'SHORT');
-  $('buySub').textContent = d === 'LONG' ? 'tap to buy' : 'locked';
-  $('sellSub').textContent = d === 'SHORT' ? 'tap to sell' : 'locked';
+function recalcDir(){
+  const d=(lastPrice==null||slPrice==null)?null
+    :lastPrice>slPrice?'LONG':lastPrice<slPrice?'SHORT':null;
+  $('dir').textContent=d||'—';
+  $('dir').className=d==='LONG'?'long':d==='SHORT'?'short':'';
+  $('btnBuy').classList.toggle('armed',d==='LONG');
+  $('btnSell').classList.toggle('armed',d==='SHORT');
+  $('buySub').textContent=d==='LONG'?'tap to buy':'locked';
+  $('sellSub').textContent=d==='SHORT'?'tap to sell':'locked';
 }
 
-// Drag: press on the chart and move vertically to place the SL where
-// your finger is. We convert the Y pixel to a price via the series.
-let dragging = false;
-function yToPrice(clientY) {
-  const rect = chartEl.getBoundingClientRect();
-  const y = clientY - rect.top;
-  const p = candle.coordinateToPrice(y);
-  return p == null ? null : p;
+// long-press to drag SL (so normal horizontal scroll still works)
+let dragging=false,pressT=null;
+function yToPrice(clientY){
+  const r=$('chart').getBoundingClientRect();
+  const p=candle&&candle.coordinateToPrice(clientY-r.top);
+  return (p==null)?null:p;
 }
-let pressTimer = null;
-chartEl.addEventListener('touchstart', (e) => {
-  // Long-press (250ms) starts SL drag so normal scroll still works.
-  pressTimer = setTimeout(() => {
-    dragging = true;
-    const p = yToPrice(e.touches[0].clientY);
-    if (p != null) setSL(p, true);
-    navigator.vibrate && navigator.vibrate(15);
-  }, 250);
-}, { passive: true });
-chartEl.addEventListener('touchmove', (e) => {
-  if (!dragging) { clearTimeout(pressTimer); return; }
+const ce=$('chart');
+ce.addEventListener('touchstart',(e)=>{
+  pressT=setTimeout(()=>{dragging=true;
+    const p=yToPrice(e.touches[0].clientY);
+    if(p!=null) setSL(p,true);
+    if(navigator.vibrate) navigator.vibrate(12);},220);
+},{passive:true});
+ce.addEventListener('touchmove',(e)=>{
+  if(!dragging){clearTimeout(pressT);return;}
   e.preventDefault();
-  const p = yToPrice(e.touches[0].clientY);
-  if (p != null) setSL(p, false);
-}, { passive: false });
-chartEl.addEventListener('touchend', () => {
-  clearTimeout(pressTimer);
-  if (dragging) { dragging = false; flashStatus('SL set ' + slPrice, 'ok'); }
-});
-// Mouse (for tablet/desktop testing)
-let mDown = false;
-chartEl.addEventListener('mousedown', (e) => {
-  if (e.shiftKey) { mDown = true; const p = yToPrice(e.clientY);
-    if (p != null) setSL(p, true); }
-});
-chartEl.addEventListener('mousemove', (e) => {
-  if (mDown) { const p = yToPrice(e.clientY);
-    if (p != null) setSL(p, false); }
-});
-window.addEventListener('mouseup', () => { mDown = false; });
-
-$('slReset').onclick = () => {
-  if (lastPrice != null) setSL(lastPrice, true);
-};
+  const p=yToPrice(e.touches[0].clientY);
+  if(p!=null) setSL(p,false);
+},{passive:false});
+ce.addEventListener('touchend',()=>{clearTimeout(pressT);
+  if(dragging){dragging=false;flash('SL set '+slPrice,'ok');}});
+let md=false;
+ce.addEventListener('mousedown',(e)=>{if(e.shiftKey){md=true;
+  const p=yToPrice(e.clientY);if(p!=null)setSL(p,true);}});
+ce.addEventListener('mousemove',(e)=>{if(md){
+  const p=yToPrice(e.clientY);if(p!=null)setSL(p,false);}});
+window.addEventListener('mouseup',()=>{md=false;});
+$('slReset').onclick=()=>{ if(lastPrice!=null) setSL(lastPrice,true); };
 
 // ── MEXC PUBLIC market data ─────────────────────────────────────────
-// Futures klines:  https://contract.mexc.com/api/v1/contract/kline/BTC_USDT?interval=Min1
-// Spot klines:     https://api.mexc.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=500
-let lastPrice = null;
-let pollKlT = null;
+// Futures: GET contract.mexc.com/api/v1/contract/kline/{SYM}
+//          ?interval=Min1&start=<unixSeconds>
+//   -> {success,code,data:{time[],open[],close[],high[],low[],vol[]}}
+// Spot:    GET api.mexc.com/api/v3/klines?symbol=BTCUSDT&interval=1m
+//          &limit=600  -> [[openTime,o,h,l,c,vol,closeTime,...],...]
+const SPOT_IV={Min1:'1m',Min5:'5m'};
+let klTimer=null;
 
-async function loadKlines() {
-  try {
-    let bars = [];
-    if (market === 'futures') {
-      const u = `https://contract.mexc.com/api/v1/contract/kline/${symbol}`
-        + `?interval=Min1`;
-      const j = await (await fetch(u, { cache: 'no-store' })).json();
-      // Futures returns columns: time[], open[], close[], high[], low[], vol[]
-      const d = j.data || j;
-      if (d && d.time) {
-        for (let i = 0; i < d.time.length; i++) {
-          bars.push({ time: d.time[i], open: +d.open[i],
-            high: +d.high[i], low: +d.low[i], close: +d.close[i] });
-        }
+function msg(t){ const m=$('chartMsg'); if(!t){m.classList.add('hide');}
+  else{m.textContent=t;m.classList.remove('hide');} }
+
+async function loadKlines(){
+  msg('Loading '+symbol+' …');
+  try{
+    let bars=[];
+    if(market==='futures'){
+      const secs=interval==='Min5'?300:60;
+      const start=Math.floor(Date.now()/1000)-600*secs;
+      const u=`https://contract.mexc.com/api/v1/contract/kline/`
+        +`${symbol}?interval=${interval}&start=${start}`;
+      const j=await (await fetch(u,{cache:'no-store'})).json();
+      const d=j&&j.data;
+      if(!d||!d.time||!d.time.length){
+        throw new Error((j&&j.message)||'no data for '+symbol
+          +' (try Spot or another symbol)');
       }
-    } else {
-      const u = `https://api.mexc.com/api/v3/klines?symbol=${symbol}`
-        + `&interval=1m&limit=500`;
-      const a = await (await fetch(u, { cache: 'no-store' })).json();
-      bars = a.map((k) => ({ time: Math.floor(k[0] / 1000),
-        open: +k[1], high: +k[2], low: +k[3], close: +k[4] }));
+      for(let i=0;i<d.time.length;i++){
+        bars.push({time:d.time[i],open:+d.open[i],high:+d.high[i],
+          low:+d.low[i],close:+d.close[i]});
+      }
+    }else{
+      const u=`https://api.mexc.com/api/v3/klines?symbol=${symbol}`
+        +`&interval=${SPOT_IV[interval]}&limit=600`;
+      const a=await (await fetch(u,{cache:'no-store'})).json();
+      if(!Array.isArray(a)||!a.length){
+        throw new Error('no spot data for '+symbol);
+      }
+      bars=a.map((k)=>({time:Math.floor(k[0]/1000),open:+k[1],
+        high:+k[2],low:+k[3],close:+k[4]}));
     }
-    if (bars.length) {
-      candle.setData(bars);
-      const last = bars[bars.length - 1];
-      lastPrice = last.close;
-      onPrice();
-      if (slPrice == null) setSL(lastPrice, false);
-      chart.timeScale().fitContent();
-    }
-    flashStatus('chart loaded · ' + symbol, 'ok');
-  } catch (e) {
-    flashStatus('chart load failed: ' + e.message
-      + ' (try the other market)', 'err');
+    // de-dupe + sort ascending (charts require strictly increasing time)
+    const seen=new Set(); bars=bars.filter((b)=>{
+      if(seen.has(b.time))return false;seen.add(b.time);return true;})
+      .sort((a,b)=>a.time-b.time);
+    candle.setData(bars);
+    lastPrice=bars[bars.length-1].close;
+    candle.applyOptions({priceFormat:{type:'price',
+      precision:priceDec(),minMove:Math.pow(10,-priceDec())}});
+    chart.timeScale().fitContent();
+    if(slPrice==null) setSL(lastPrice,false);
+    else recalcDir();
+    msg('');
+    flash(symbol+' · '+interval+' · '+bars.length+' candles','ok');
+  }catch(e){
+    msg('⚠ '+e.message+'\n\nTap the symbol button to pick another '
+      +'market, or switch Futures/Spot.');
+    flash('load failed: '+e.message,'err');
   }
 }
 
-async function tickPrice() {
-  try {
-    if (market === 'futures') {
-      const u = `https://contract.mexc.com/api/v1/contract/ticker`
-        + `?symbol=${symbol}`;
-      const j = await (await fetch(u, { cache: 'no-store' })).json();
-      const d = j.data || j;
-      const p = d && (d.lastPrice || d.last || d.fairPrice);
-      if (p) { lastPrice = +p; onPrice(); }
-    } else {
-      const u = `https://api.mexc.com/api/v3/ticker/price?symbol=${symbol}`;
-      const j = await (await fetch(u, { cache: 'no-store' })).json();
-      if (j && j.price) { lastPrice = +j.price; onPrice(); }
+async function tickPrice(){
+  if(lastPrice==null) return;
+  try{
+    if(market==='futures'){
+      const u=`https://contract.mexc.com/api/v1/contract/ticker`
+        +`?symbol=${symbol}`;
+      const j=await (await fetch(u,{cache:'no-store'})).json();
+      const d=j&&j.data;
+      const p=d&&(d.lastPrice||d.fairPrice||d.last);
+      if(p) bumpLast(+p);
+    }else{
+      const u=`https://api.mexc.com/api/v3/ticker/price?symbol=${symbol}`;
+      const j=await (await fetch(u,{cache:'no-store'})).json();
+      if(j&&j.price) bumpLast(+j.price);
     }
-  } catch (e) { /* transient */ }
+  }catch(e){/* transient */}
 }
-
-let lastBarTime = null;
-function onPrice() {
-  if (lastPrice == null) return;
-  $('symBtn').textContent = symbol + ' ' + lastPrice + ' ▾';
-  // Update the forming candle's close so the chart feels live.
-  const t = Math.floor(Date.now() / 60000) * 60;
-  candle.update({ time: t, open: lastPrice, high: lastPrice,
-    low: lastPrice, close: lastPrice });
+function bumpLast(p){
+  lastPrice=p;
+  const secs=interval==='Min5'?300:60;
+  const t=Math.floor(Date.now()/1000/secs)*secs;
+  try{ candle.update({time:t,open:p,high:p,low:p,close:p}); }catch(e){}
+  $('symBtn').textContent=symbol+' '+p;
   recalcDir();
 }
 
-// ── Symbol picker ───────────────────────────────────────────────────
-$('symBtn').onclick = () => { openSymbols(); };
-let allSymbols = [];
-async function fetchSymbols() {
-  try {
-    if (market === 'futures') {
-      const j = await (await fetch(
-        'https://contract.mexc.com/api/v1/contract/detail',
-        { cache: 'no-store' })).json();
-      allSymbols = (j.data || []).map((c) => c.symbol).filter(Boolean);
-    } else {
-      const j = await (await fetch(
-        'https://api.mexc.com/api/v3/defaultSymbols',
-        { cache: 'no-store' })).json();
-      allSymbols = (j.data || j.symbols || j) || [];
-    }
-  } catch (e) { allSymbols = []; }
-  renderSymbols('');
-}
-function renderSymbols(q) {
-  const list = $('symList');
-  list.innerHTML = '';
-  const f = allSymbols
-    .filter((s) => s.toUpperCase().includes(q.toUpperCase()))
-    .slice(0, 40);
-  if (!f.length) {
-    list.innerHTML = '<div class="hint">No match. '
-      + 'Try the other market or a different search.</div>';
-    return;
+// ── Watchlist / symbol picker ───────────────────────────────────────
+$('symBtn').onclick=()=>$('symSheet').classList.add('show');
+let extra=[];
+function renderWL(q){
+  const wl=$('wl'); wl.innerHTML='';
+  let items=WATCH[market].slice();
+  if(q){
+    const qq=q.toUpperCase();
+    items=items.filter(([s,n])=>s.includes(qq)||n.toUpperCase().includes(qq));
+    extra.filter((s)=>s.toUpperCase().includes(qq)).slice(0,25)
+      .forEach((s)=>{ if(!items.some((it)=>it[0]===s)) items.push([s,'']); });
   }
-  for (const s of f) {
-    const b = document.createElement('button');
-    b.textContent = s;
-    b.onclick = () => {
-      symbol = s;
-      localStorage.setItem(LS_SYM, JSON.stringify({ market, symbol }));
+  if(!items.length){ wl.innerHTML='<div class="hint">No match. '
+    +'Try the other market.</div>'; return; }
+  for(const [s,n] of items){
+    const b=document.createElement('button');
+    if(s===symbol) b.className='sel';
+    b.innerHTML=`<span>${s}</span><span class="t">${n||''}</span>`;
+    b.onclick=()=>{ symbol=s;
+      localStorage.setItem(LS_SYM,JSON.stringify({market,symbol,interval}));
       $('symSheet').classList.remove('show');
-      slPrice = null;
-      loadKlines();
-    };
-    list.appendChild(b);
+      slPrice=null; lastPrice=null; loadKlines(); };
+    wl.appendChild(b);
   }
 }
-function openSymbols() {
-  $('symSheet').classList.add('show');
-  if (!allSymbols.length) fetchSymbols(); else renderSymbols('');
+async function loadExtra(){
+  try{
+    if(market==='futures'){
+      const j=await (await fetch(
+        'https://contract.mexc.com/api/v1/contract/detail',
+        {cache:'no-store'})).json();
+      extra=(j.data||[]).map((c)=>c.symbol).filter(Boolean);
+    }else{
+      const j=await (await fetch(
+        'https://api.mexc.com/api/v3/defaultSymbols',
+        {cache:'no-store'})).json();
+      extra=(j.data||j.symbols||[]);
+    }
+  }catch(e){ extra=[]; }
 }
-$('symSearch').addEventListener('input',
-  (e) => renderSymbols(e.target.value));
-document.querySelectorAll('#mkt button').forEach((b) => {
-  b.onclick = () => {
+$('symSearch').addEventListener('input',(e)=>renderWL(e.target.value));
+document.querySelectorAll('#mkt button').forEach((b)=>{
+  b.onclick=()=>{
     document.querySelectorAll('#mkt button')
-      .forEach((x) => x.classList.toggle('on', x === b));
-    market = b.dataset.m;
-    symbol = market === 'futures' ? 'BTC_USDT' : 'BTCUSDT';
-    fetchSymbols();
+      .forEach((x)=>x.classList.toggle('on',x===b));
+    market=b.dataset.m;
+    symbol=WATCH[market][0][0];
+    extra=[]; renderWL(''); loadExtra();
+  };
+});
+document.querySelectorAll('#tf button').forEach((b)=>{
+  b.onclick=()=>{
+    document.querySelectorAll('#tf button')
+      .forEach((x)=>x.classList.toggle('on',x===b));
+    interval=b.dataset.i;
+    localStorage.setItem(LS_SYM,JSON.stringify({market,symbol,interval}));
+    loadKlines();
   };
 });
 
-// ── Connection health ───────────────────────────────────────────────
-let lastStateAt = 0;
-function setConn(s) {
-  $('conn').className = 'conn ' + s;
-  $('conn').textContent = s === 'live' ? 'live'
-    : s === 'off' ? 'offline' : 'stale';
-}
-setInterval(() => {
-  const age = Date.now() - lastStateAt;
-  setConn(!lastStateAt ? 'off' : age < 4000 ? 'live'
-    : age < 15000 ? 'stale' : 'off');
-}, 1000);
+// ── Setup sheet ─────────────────────────────────────────────────────
+function needSetup(){ return !(cfg&&cfg.url&&cfg.key); }
+$('gear').onclick=()=>{ if(cfg){$('inUrl').value=cfg.url;
+  $('inKey').value=cfg.key;} $('setup').classList.add('show'); };
+$('saveCfg').onclick=()=>{
+  const url=$('inUrl').value.trim().replace(/\/+$/,'');
+  const key=$('inKey').value.trim();
+  if(!/^https:\/\/.+firebaseio\.com$/.test(url)||key.length<6){
+    alert('Enter a valid Firebase URL and a 6+ char key.');return;}
+  cfg={url,key}; localStorage.setItem(LS,JSON.stringify(cfg));
+  $('setup').classList.remove('show'); startBridge();
+};
 
-// ── Bridge: poll laptop state, send commands (same as remote page) ──
-let pollT = null;
-async function poll() {
-  if (!cfg) return;
-  try {
-    const s = await dbGet('state');
-    if (s && s.key === cfg.key) {
-      lastStateAt = Date.now();
-      if (s.symbol) { /* laptop's symbol shown only as status */ }
-    }
-  } catch (e) { /* keep trying */ }
+// ── Bridge: poll state, send commands (same as remote page) ─────────
+let lastStateAt=0,pollT=null;
+function setConn(s){ $('conn').className=s;
+  $('conn').textContent=s==='live'?'live':s==='off'?'offline':'stale'; }
+setInterval(()=>{ const a=Date.now()-lastStateAt;
+  setConn(!lastStateAt?'off':a<4000?'live':a<15000?'stale':'off'); },1000);
+async function poll(){
+  if(!cfg) return;
+  try{ const s=await dbGet('state');
+    if(s&&s.key===cfg.key) lastStateAt=Date.now();
+  }catch(e){}
 }
-function startBridge() {
-  if (pollT) clearInterval(pollT);
-  if (pollKlT) clearInterval(pollKlT);
-  if (!cfg) return;
-  poll(); pollT = setInterval(poll, 900);
-  loadKlines();
-  pollKlT = setInterval(tickPrice, 1500);
+function startBridge(){
+  if(pollT) clearInterval(pollT);
+  if(klTimer) clearInterval(klTimer);
+  if(!cfg){ flash('Tap ⚙ to connect','');
+    msg('Not connected.\nTap ⚙ to enter Firebase URL + key.');
+    return; }
+  poll(); pollT=setInterval(poll,900);
+  loadKlines(); klTimer=setInterval(tickPrice,1500);
 }
 
-let busy = false;
-async function sendCmd(verb) {
-  if (!cfg) { $('setup').classList.add('show'); return; }
-  if (busy) return;
-  if ((verb === 'buy' || verb === 'sell' || verb === 'fill')
-      && slPrice == null) {
-    flashStatus('Set the SL line first', 'err'); return;
-  }
-  busy = true;
-  const id = 'c' + Date.now() + '_'
-    + Math.random().toString(36).slice(2, 7);
-  flashStatus('sending ' + verb + '…', '');
-  try {
-    await dbPut('cmd', { id, verb, key: cfg.key,
-      ts: Date.now(), sl: slPrice });
-    const t0 = Date.now();
-    while (Date.now() - t0 < 6000) {
-      await new Promise((r) => setTimeout(r, 400));
-      let ack;
-      try { ack = await dbGet('ack'); } catch (e) { continue; }
-      if (ack && ack.id === id) {
-        flashStatus((ack.ok ? '✓ ' : '✗ ')
-          + (ack.reason || (ack.ok ? 'done' : 'failed')),
-          ack.ok ? 'ok' : 'err');
-        busy = false; return;
+let busy=false;
+async function sendCmd(verb){
+  if(!cfg){ $('setup').classList.add('show'); return; }
+  if(busy) return;
+  if((verb==='buy'||verb==='sell'||verb==='fill')&&slPrice==null){
+    flash('Set the SL line first','err'); return; }
+  busy=true;
+  const id='c'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+  flash('sending '+verb+'…','');
+  try{
+    await dbPut('cmd',{id,verb,key:cfg.key,ts:Date.now(),sl:slPrice});
+    const t0=Date.now();
+    while(Date.now()-t0<6000){
+      await new Promise((r)=>setTimeout(r,400));
+      let ack; try{ack=await dbGet('ack');}catch(e){continue;}
+      if(ack&&ack.id===id){
+        flash((ack.ok?'✓ ':'✗ ')+(ack.reason||(ack.ok?'done':'failed')),
+          ack.ok?'ok':'err'); busy=false; return;
       }
     }
-    flashStatus('⚠ no reply — check laptop & MEXC tab', 'err');
-  } catch (e) {
-    flashStatus('✗ ' + e.message, 'err');
-  }
-  busy = false;
+    flash('⚠ no reply — check laptop & MEXC tab','err');
+  }catch(e){ flash('✗ '+e.message,'err'); }
+  busy=false;
 }
-
-// Two-step confirm for BUY/SELL (matches the rest of the system).
-let pend = null, pendT = null;
-function tradeTap(side, btn) {
-  if (!btn.classList.contains('armed')) {
-    flashStatus(side + ' locked — SL implies the other side', 'err');
-    return;
-  }
-  if (pend === side) {
-    clearTimeout(pendT); pend = null;
+let pend=null,pendT=null;
+function tradeTap(side,btn){
+  if(!btn.classList.contains('armed')){
+    flash(side+' locked — SL implies the other side','err'); return; }
+  if(pend===side){ clearTimeout(pendT); pend=null;
     btn.classList.remove('confirm');
-    sendCmd(side === 'LONG' ? 'buy' : 'sell');
-    return;
-  }
-  pend = side;
-  btn.classList.add('confirm');
-  flashStatus('Tap ' + (side === 'LONG' ? 'BUY' : 'SELL')
-    + ' again to confirm', 'err');
+    sendCmd(side==='LONG'?'buy':'sell'); return; }
+  pend=side; btn.classList.add('confirm');
+  flash('Tap '+(side==='LONG'?'BUY':'SELL')+' again to confirm','err');
   clearTimeout(pendT);
-  pendT = setTimeout(() => {
-    pend = null; btn.classList.remove('confirm');
-  }, 2500);
+  pendT=setTimeout(()=>{pend=null;btn.classList.remove('confirm');},2500);
 }
-$('btnBuy').onclick = () => tradeTap('LONG', $('btnBuy'));
-$('btnSell').onclick = () => tradeTap('SHORT', $('btnSell'));
-$('btnFill').onclick = () => sendCmd('fill');
+$('btnBuy').onclick=()=>tradeTap('LONG',$('btnBuy'));
+$('btnSell').onclick=()=>tradeTap('SHORT',$('btnSell'));
+$('btnFill').onclick=()=>sendCmd('fill');
 
-let stTimer = null;
-function flashStatus(msg, cls) {
-  const s = $('status');
-  s.textContent = msg;
-  s.className = 'status ' + (cls || '');
+function flash(m,c){ const s=$('status'); s.textContent=m;
+  s.className=c||''; }
+
+// ── Boot ────────────────────────────────────────────────────────────
+function boot(){
+  initChart();
+  layout();
+  renderWL('');
+  loadExtra();
+  if(needSetup()){ $('setup').classList.add('show');
+    msg('Tap ⚙ to connect, then the chart loads.'); }
+  else startBridge();
 }
-
-// ── Go ──────────────────────────────────────────────────────────────
-if (!needSetup()) startBridge();
-else flashStatus('Tap ⚙ to connect to your laptop', '');
+window.addEventListener('resize',layout);
+window.addEventListener('orientationchange',()=>setTimeout(layout,250));
+if(document.readyState==='complete'||document.readyState==='interactive'){
+  setTimeout(boot,60);
+}else{
+  window.addEventListener('DOMContentLoaded',boot);
+}
 </script>
 </body>
 </html>
