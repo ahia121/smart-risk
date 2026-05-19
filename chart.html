@@ -353,92 +353,62 @@ ce.addEventListener('mousemove',(e)=>{if(md){
 window.addEventListener('mouseup',()=>{md=false;});
 $('slReset').onclick=()=>{ if(lastPrice!=null) setSL(lastPrice,true); };
 
-// ── MEXC PUBLIC market data ─────────────────────────────────────────
-// Futures: GET contract.mexc.com/api/v1/contract/kline/{SYM}
-//          ?interval=Min1&start=<unixSeconds>
-//   -> {success,code,data:{time[],open[],close[],high[],low[],vol[]}}
-// Spot:    GET api.mexc.com/api/v3/klines?symbol=BTCUSDT&interval=1m
-//          &limit=600  -> [[openTime,o,h,l,c,vol,closeTime,...],...]
-const SPOT_IV={Min1:'1m',Min5:'5m'};
-let klTimer=null;
+// ── Candles via the LAPTOP (no browser CORS) ────────────────────────
+// The phone CANNOT call MEXC's API (browser CORS blocks it). Instead the
+// laptop extension — running INSIDE mexc.com — fetches the candles
+// same-origin and relays them over the SAME Firebase bridge. We:
+//   1. send a 'chart' command telling the laptop which symbol/interval,
+//   2. poll the /candles path for the bars it publishes.
+let klTimer=null, lastReqKey='';
 
 function msg(t){ const m=$('chartMsg'); if(!t){m.classList.add('hide');}
   else{m.textContent=t;m.classList.remove('hide');} }
 
-async function loadKlines(){
-  msg('Loading '+symbol+' …');
+async function requestFeed(){
+  if(!cfg) return;
+  const key=symbol+'|'+interval;
+  if(key===lastReqKey) return;          // already asked for this
+  lastReqKey=key;
+  msg('Asking laptop for '+symbol+' ('+interval+') …');
   try{
-    let bars=[];
-    if(market==='futures'){
-      const secs=interval==='Min5'?300:60;
-      const start=Math.floor(Date.now()/1000)-600*secs;
-      const u=`https://contract.mexc.com/api/v1/contract/kline/`
-        +`${symbol}?interval=${interval}&start=${start}`;
-      const j=await (await fetch(u,{cache:'no-store'})).json();
-      const d=j&&j.data;
-      if(!d||!d.time||!d.time.length){
-        throw new Error((j&&j.message)||'no data for '+symbol
-          +' (try Spot or another symbol)');
-      }
-      for(let i=0;i<d.time.length;i++){
-        bars.push({time:d.time[i],open:+d.open[i],high:+d.high[i],
-          low:+d.low[i],close:+d.close[i]});
-      }
-    }else{
-      const u=`https://api.mexc.com/api/v3/klines?symbol=${symbol}`
-        +`&interval=${SPOT_IV[interval]}&limit=600`;
-      const a=await (await fetch(u,{cache:'no-store'})).json();
-      if(!Array.isArray(a)||!a.length){
-        throw new Error('no spot data for '+symbol);
-      }
-      bars=a.map((k)=>({time:Math.floor(k[0]/1000),open:+k[1],
-        high:+k[2],low:+k[3],close:+k[4]}));
-    }
-    // de-dupe + sort ascending (charts require strictly increasing time)
+    const id='c'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+    await dbPut('cmd',{id,verb:'chart',key:cfg.key,ts:Date.now(),
+      sym:symbol,iv:interval});
+  }catch(e){ msg('Could not reach laptop: '+e.message); }
+}
+
+let lastBarsAt=0;
+async function pollCandles(){
+  if(!cfg) return;
+  try{
+    const c=await dbGet('candles');
+    if(!c||c.key!==cfg.key) return;
+    if(!c.ok){ msg('⚠ laptop: '+(c.reason||'no data')+
+      '\n\nMake sure the laptop MEXC tab is open and the extension '+
+      'is reloaded, then pick the symbol again.'); return; }
+    if(c.symbol && symbol && c.symbol.replace('_','')!==
+       symbol.replace('_','')) return;  // stale (different symbol)
+    if(!c.bars||!c.bars.length) return;
+    lastBarsAt=Date.now();
+    let bars=c.bars.map((k)=>({time:k[0],open:k[1],high:k[2],
+      low:k[3],close:k[4]}));
     const seen=new Set(); bars=bars.filter((b)=>{
       if(seen.has(b.time))return false;seen.add(b.time);return true;})
       .sort((a,b)=>a.time-b.time);
     candle.setData(bars);
-    lastPrice=bars[bars.length-1].close;
+    lastPrice=c.last||bars[bars.length-1].close;
     candle.applyOptions({priceFormat:{type:'price',
       precision:priceDec(),minMove:Math.pow(10,-priceDec())}});
     chart.timeScale().fitContent();
-    if(slPrice==null) setSL(lastPrice,false);
-    else recalcDir();
+    if(slPrice==null) setSL(lastPrice,false); else recalcDir();
+    $('symBtn').textContent=symbol+' '+lastPrice;
     msg('');
     flash(symbol+' · '+interval+' · '+bars.length+' candles','ok');
-  }catch(e){
-    msg('⚠ '+e.message+'\n\nTap the symbol button to pick another '
-      +'market, or switch Futures/Spot.');
-    flash('load failed: '+e.message,'err');
-  }
+  }catch(e){ /* transient; keep polling */ }
 }
 
-async function tickPrice(){
-  if(lastPrice==null) return;
-  try{
-    if(market==='futures'){
-      const u=`https://contract.mexc.com/api/v1/contract/ticker`
-        +`?symbol=${symbol}`;
-      const j=await (await fetch(u,{cache:'no-store'})).json();
-      const d=j&&j.data;
-      const p=d&&(d.lastPrice||d.fairPrice||d.last);
-      if(p) bumpLast(+p);
-    }else{
-      const u=`https://api.mexc.com/api/v3/ticker/price?symbol=${symbol}`;
-      const j=await (await fetch(u,{cache:'no-store'})).json();
-      if(j&&j.price) bumpLast(+j.price);
-    }
-  }catch(e){/* transient */}
-}
-function bumpLast(p){
-  lastPrice=p;
-  const secs=interval==='Min5'?300:60;
-  const t=Math.floor(Date.now()/1000/secs)*secs;
-  try{ candle.update({time:t,open:p,high:p,low:p,close:p}); }catch(e){}
-  $('symBtn').textContent=symbol+' '+p;
-  recalcDir();
-}
+function loadKlines(){ lastReqKey=''; requestFeed(); pollCandles(); }
+function tickPrice(){ requestFeed(); pollCandles(); }
 
 // ── Watchlist / symbol picker ───────────────────────────────────────
 $('symBtn').onclick=()=>$('symSheet').classList.add('show');
@@ -465,21 +435,11 @@ function renderWL(q){
     wl.appendChild(b);
   }
 }
-async function loadExtra(){
-  try{
-    if(market==='futures'){
-      const j=await (await fetch(
-        'https://contract.mexc.com/api/v1/contract/detail',
-        {cache:'no-store'})).json();
-      extra=(j.data||[]).map((c)=>c.symbol).filter(Boolean);
-    }else{
-      const j=await (await fetch(
-        'https://api.mexc.com/api/v3/defaultSymbols',
-        {cache:'no-store'})).json();
-      extra=(j.data||j.symbols||[]);
-    }
-  }catch(e){ extra=[]; }
-}
+// The full symbol list also can't be fetched from the phone (CORS).
+// The prebuilt watchlist covers your markets; free-text search lets
+// you type any exact MEXC symbol (e.g. PEPE_USDT) — the laptop
+// validates it when it tries to pull candles.
+function loadExtra(){ extra=[]; }
 $('symSearch').addEventListener('input',(e)=>renderWL(e.target.value));
 document.querySelectorAll('#mkt button').forEach((b)=>{
   b.onclick=()=>{
@@ -487,7 +447,7 @@ document.querySelectorAll('#mkt button').forEach((b)=>{
       .forEach((x)=>x.classList.toggle('on',x===b));
     market=b.dataset.m;
     symbol=WATCH[market][0][0];
-    extra=[]; renderWL(''); loadExtra();
+    extra=[]; renderWL('');
   };
 });
 document.querySelectorAll('#tf button').forEach((b)=>{
