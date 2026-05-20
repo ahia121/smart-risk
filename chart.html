@@ -73,8 +73,11 @@
   #slReset{ background:#12241b; border:1px solid var(--line);
     color:var(--mint); border-radius:8px; padding:7px 11px;
     font:600 11px var(--mono); cursor:pointer; }
-  #dir{ margin-left:auto; font-weight:800; font-size:14px; }
-  #dir.long{ color:var(--mint); } #dir.short{ color:var(--red); }
+  #mkt{ margin-left:auto; text-align:right; }
+  #mktPrice{ font-weight:800; font-size:17px; color:var(--mint);
+    transition:color .12s; line-height:1.1; }
+  #mktPrice.up{ color:var(--mint); } #mktPrice.dn{ color:var(--red); }
+  #mktPrice.stale{ color:#7aa890; }
 
   #pad{ position:absolute; left:0; right:0; height:78px;
     display:grid; grid-template-columns:1fr 1.15fr 1fr; gap:10px;
@@ -162,7 +165,10 @@
       <div class="val" id="slVal">—</div>
     </div>
     <button id="slReset">Center SL</button>
-    <div id="dir">—</div>
+    <div id="mkt">
+      <div class="lab">MEXC market</div>
+      <div class="mkv" id="mktPrice">—</div>
+    </div>
   </div>
 
   <div id="pad">
@@ -299,9 +305,12 @@ function priceDec(){
 }
 function drawSL(p){
   if(slLine) candle.removePriceLine(slLine);
+  // No axis label and no title → the red line itself shows where SL is;
+  // the precise number lives in the bottom bar so it never blocks the
+  // candles, and the right-edge axis labels stay readable.
   slLine=candle.createPriceLine({price:p,color:'#ff5d6c',lineWidth:2,
     lineStyle:LightweightCharts.LineStyle.Solid,
-    axisLabelVisible:true,title:'SL'});
+    axisLabelVisible:false,title:''});
 }
 function setSL(p,user){
   if(p==null||!isFinite(p)) return;
@@ -315,8 +324,6 @@ function setSL(p,user){
 function recalcDir(){
   const d=(lastPrice==null||slPrice==null)?null
     :lastPrice>slPrice?'LONG':lastPrice<slPrice?'SHORT':null;
-  $('dir').textContent=d||'—';
-  $('dir').className=d==='LONG'?'long':d==='SHORT'?'short':'';
   $('btnBuy').classList.toggle('armed',d==='LONG');
   $('btnSell').classList.toggle('armed',d==='SHORT');
   $('buySub').textContent=d==='LONG'?'tap to buy':'locked';
@@ -359,7 +366,35 @@ $('slReset').onclick=()=>{ if(lastPrice!=null) setSL(lastPrice,true); };
 // same-origin and relays them over the SAME Firebase bridge. We:
 //   1. send a 'chart' command telling the laptop which symbol/interval,
 //   2. poll the /candles path for the bars it publishes.
-let klTimer=null, lastReqKey='';
+let klTimer=null, tkTimer=null, lastReqKey='', firstFitDone=false;
+let lastMktPrice=null, lastMktAt=0;
+
+async function pollTicker(){
+  if(!cfg) return;
+  try{
+    const t=await dbGet('ticker');
+    if(!t||t.key!==cfg.key||t.price==null) return;
+    // Stale ticker for a previous symbol → ignore.
+    if(t.symbol && symbol &&
+       t.symbol.replace('_','')!==symbol.replace('_','')) return;
+    const p=+t.price; if(!isFinite(p)) return;
+    const cls=lastMktPrice==null?'':p>lastMktPrice?'up'
+      :p<lastMktPrice?'dn':'';
+    $('mktPrice').textContent=p;
+    $('mktPrice').className=cls;
+    lastMktPrice=p; lastMktAt=Date.now();
+    // Use the FRESHER market tick to drive direction + button arming,
+    // so the BUY/SELL state matches the latest market move (no waiting
+    // 3 s for the next candle pull).
+    lastPrice=p; recalcDir();
+  }catch(e){ /* transient */ }
+}
+// Visually stale the market price if no fresh tick for >4 s.
+setInterval(()=>{
+  if(!lastMktAt) return;
+  if(Date.now()-lastMktAt>4000) $('mktPrice').classList.add('stale');
+},1000);
+
 
 function msg(t){ const m=$('chartMsg'); if(!t){m.classList.add('hide');}
   else{m.textContent=t;m.classList.remove('hide');} }
@@ -395,11 +430,24 @@ async function pollCandles(){
     const seen=new Set(); bars=bars.filter((b)=>{
       if(seen.has(b.time))return false;seen.add(b.time);return true;})
       .sort((a,b)=>a.time-b.time);
+    // Remember the user's current view so we can restore it after the
+    // refresh: setData() resets the visible range, which is why the
+    // chart kept jumping back to the right edge every 3 seconds.
+    let savedRange=null;
+    try{ savedRange=chart.timeScale().getVisibleLogicalRange(); }catch(e){}
     candle.setData(bars);
     lastPrice=c.last||bars[bars.length-1].close;
     candle.applyOptions({priceFormat:{type:'price',
       precision:priceDec(),minMove:Math.pow(10,-priceDec())}});
-    chart.timeScale().fitContent();
+    // First load (or symbol change) auto-fits; later refreshes keep the
+    // user's pan/zoom so dragging left to inspect history doesn't snap
+    // back to the right edge.
+    if(!firstFitDone){
+      chart.timeScale().fitContent();
+      firstFitDone=true;
+    }else if(savedRange){
+      try{ chart.timeScale().setVisibleLogicalRange(savedRange); }catch(e){}
+    }
     if(slPrice==null) setSL(lastPrice,false); else recalcDir();
     $('symBtn').textContent=symbol+' '+lastPrice;
     msg('');
@@ -407,8 +455,9 @@ async function pollCandles(){
   }catch(e){ /* transient; keep polling */ }
 }
 
-function loadKlines(){ lastReqKey=''; requestFeed(); pollCandles(); }
-function tickPrice(){ requestFeed(); pollCandles(); }
+function loadKlines(){ lastReqKey=''; firstFitDone=false;
+  requestFeed(); pollCandles(); }
+function tickPrice(){ requestFeed(); pollCandles(); pollTicker(); }
 
 // ── Watchlist / symbol picker ───────────────────────────────────────
 $('symBtn').onclick=()=>$('symSheet').classList.add('show');
@@ -488,11 +537,17 @@ async function poll(){
 function startBridge(){
   if(pollT) clearInterval(pollT);
   if(klTimer) clearInterval(klTimer);
+  if(tkTimer) clearInterval(tkTimer);
   if(!cfg){ flash('Tap ⚙ to connect','');
     msg('Not connected.\nTap ⚙ to enter Firebase URL + key.');
     return; }
   poll(); pollT=setInterval(poll,900);
-  loadKlines(); klTimer=setInterval(tickPrice,1500);
+  loadKlines();
+  // Candles + symbol request every 2.5s, ticker (small payload) every
+  // 700ms — gives a near-realtime market readout while keeping the
+  // heavier candle traffic light enough for Firebase free tier.
+  klTimer=setInterval(tickPrice,2500);
+  tkTimer=setInterval(pollTicker,700);
 }
 
 let busy=false;
